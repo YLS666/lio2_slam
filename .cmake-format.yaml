@@ -1,0 +1,48 @@
+# 使用 2 个空格缩进
+indent_width: 2
+
+# 单词宽度限制，超出就自动换行
+line_width: 80
+
+# 对列表强制换行（如 add_executable/add_library 等）
+always_wrap:
+- add_executable
+- add_library
+- target_link_libraries
+- target_include_directories
+- target_compile_definitions
+
+# 尽量将每个参数放在单独一行
+max_lines_hwrap: 1
+
+# 明确启用每行一个参数样式
+split_arguments: true
+
+# 注释前保留空格
+dangle_comment: true
+
+# 对所有注释进行格式化
+format_comments: true
+
+# 参数对齐方式（none、left、right、center、auto）
+align_argument: auto
+
+# 别对 add_custom_command 尝试压缩一行
+line_ending: unix
+
+# 是否将二级 list 项缩进（推荐 false，更整洁）
+enable_sort: False
+
+# 不对 include()/find_package() 自动排序
+autosort: False
+
+# 是否格式化 file() 命令参数（适用项目清理或拷贝脚本）
+enable_file_templates: false
+
+# 保留空行以增强可读性
+empty_line_between_arguments: true
+
+# 保留函数之间的空行
+separate_ctrl_name_with_space: true
+separate_fn_name_with_space: true
+separate_argument_with_space: true

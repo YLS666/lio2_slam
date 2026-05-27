@@ -1,0 +1,14 @@
+imu_topic: /ns1102/livox/imu
+
+lidar_topic: /ns1102/livox/lidar
+
+odom_topic: /odom
+
+map_topic: /map
+
+deskew_cloud_topic: /deskew_cloud
+
+# lidar -> imu
+t_imu_lidar: [ -0.011, -0.02329, 0.04412 ]
+
+r_imu_lidar: [ 1, 0, 0, 0, 1, 0, 0, 0, 1 ]

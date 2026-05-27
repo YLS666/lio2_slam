@@ -1,0 +1,49 @@
+{
+    // 指定 clangd 可执行文件的路径（如果在系统路径中可直接使用 "clangd"）
+    "clangd.fallbackFlags": [
+        "-std=c++17"
+    ],
+    // 配置 clangd 启动参数
+    "clangd.arguments": [
+        // 在后台自动分析文件（基于complie_commands)
+        "--background-index",
+        // 标记compelie_commands.json文件的目录位置
+        "--compile-commands-dir=${workspaceFolder}/build",
+        // 同时开启的任务数量
+        "-j=12",
+        // 全局补全（会自动补充头文件）
+        "--all-scopes-completion",
+        // 更详细的补全内容
+        "--completion-style=detailed",
+        // Include what you use
+        "--header-insertion=iwyu",
+        // pch优化的位置 disk memory
+        "--pch-storage=memory",
+        // 跨文件重命名变量
+        "--cross-file-rename",
+        // 从yaml文件读取配置
+        // "--enable-config",
+        // clang-format style to apply by default when no .clang-format file is found
+        "--fallback-style=WebKit",
+        // 启用 Clang-Tidy 静态代码分析
+        "--clang-tidy",
+        "--clang-tidy-checks=performance-*,bugprone-*",
+        // 指定C++编译链工具
+        "--query-driver=g++",
+        // 输出详细的日志信息
+        "--log=verbose",
+        // 漂亮的输出格式
+        "--pretty",
+    ],
+    // 配置 CMake 构建目录
+    "cmake.buildDirectory": "${workspaceFolder}/build",
+    // 配置 CMake 构建环境变量，使其生成编译命令数据库
+    "cmake.buildEnvironment": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+    },
+    "cmake.sourceDirectory": "${workspaceFolder}",
+    "cmake.configureOnOpen": false,
+    "editor.formatOnSave": true,
+    "editor.tabSize": 2
+
+}
