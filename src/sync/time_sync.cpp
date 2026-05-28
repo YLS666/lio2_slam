@@ -12,7 +12,7 @@ void TimeSync::pushImu(const sensor_msgs::msg::Imu& imu) {
   }
 }
 
-void TimeSync::pushCloud(pcl::PointCloud<PointXYZIT>::Ptr cloud) {
+void TimeSync::pushCloud(pcl::PointCloud<FullPointType>::Ptr cloud) {
   cloud_buffer_.push_back(cloud);
 
   if (cloud_buffer_.size() > 100) {

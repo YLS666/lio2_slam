@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <iostream>
-#include "utils/so3.hpp"
+#include "utils/eigen_types.hpp"
 
 ImuProcessor::ImuProcessor() {
   gravity_ = Eigen::Vector3d(0, 0, -g_norm_);
@@ -59,8 +59,7 @@ void ImuProcessor::initializeImu(double t, const Eigen::Vector3d& gyr, const Eig
 
   ImuState init_state;
   init_state.timestamp = t;
-  init_state.q = q0;
-  init_state.p.setZero();
+  init_state.T = Sophus::SE3d(q0, Eigen::Vector3d::Zero());
   init_state.v.setZero();
   init_state.bg = bg_;
   init_state.ba = ba_;
@@ -116,12 +115,13 @@ bool ImuProcessor::processImu(const sensor_msgs::msg::Imu& imu) {
   ImuState state;
   state.timestamp = t;
   // 姿态更新：当前帧的姿态 = 上一帧的姿态 * 当前帧的增量旋转
-  state.q = last.q * dq;
-  state.q.normalize();
+  Eigen::Quaterniond q = last.T.unit_quaternion() * dq;
+  q.normalize();
   // 加速度更新：当前帧的加速度 = 当前帧的旋转矩阵 * 当前帧的加速度 + 重力(一般为-g)
-  Eigen::Vector3d acc_world = state.q * acc + gravity_;
+  Eigen::Vector3d acc_world = q * acc + gravity_;
   // 位姿更新：当前帧的位姿 = 上一帧的位姿 + 上一帧的线速度 * 时间差 + 0.5 * 加速度 * 时间差平方
-  state.p = last.p + last.v * dt + 0.5 * acc_world * dt * dt;
+  Eigen::Vector3d p = last.T.translation() + last.v * dt + 0.5 * acc_world * dt * dt;
+  state.T = Sophus::SE3d(q, p);
   // 速度更新：当前帧的速度 = 上一帧的速度 + 当前帧的加速度 * 时间差
   state.v = last.v + acc_world * dt;
   // 保存偏置
@@ -134,8 +134,8 @@ bool ImuProcessor::processImu(const sensor_msgs::msg::Imu& imu) {
   // std::cout << "acc : " << acc.transpose() << std::endl;
   // std::cout << "acc_world : " << acc_world.transpose() << std::endl;
   // std::cout << "gravity : " << gravity_.transpose() << std::endl;
-  // std::cout << "quaternion : " << state.q.coeffs().transpose() << std::endl;
-  // std::cout << "position : " << state.p.transpose() << std::endl;
+  // std::cout << "quaternion : " << state.T.unit_quaternion().coeffs().transpose() << std::endl;
+  // std::cout << "position : " << state.T.translation().transpose() << std::endl;
   // std::cout << "velocity : " << state.v.transpose() << std::endl;
   // std::cout << "bg = " << bg_.transpose() << std::endl;
   // std::cout << "ba = " << ba_.transpose() << std::endl << std::endl;
@@ -195,8 +195,10 @@ ImuState ImuProcessor::interpolate(double t) const {
 
   state.timestamp = t;
 
-  state.q = s1.q.slerp(ratio, s2.q);              // 插值姿态，使用球面线性插值（slerp）
-  state.p = (1.0 - ratio) * s1.p + ratio * s2.p;  // 插值位姿,使用线性插值
+  Eigen::Quaterniond q = s1.T.unit_quaternion().slerp(ratio, s2.T.unit_quaternion());
+  Eigen::Vector3d p = (1.0 - ratio) * s1.T.translation() + ratio * s2.T.translation();
+
+  state.T = Sophus::SE3d(q, p);
   state.v = (1.0 - ratio) * s1.v + ratio * s2.v;
   state.bg = (1.0 - ratio) * s1.bg + ratio * s2.bg;
   state.ba = (1.0 - ratio) * s1.ba + ratio * s2.ba;

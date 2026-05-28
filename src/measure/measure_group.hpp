@@ -12,7 +12,7 @@ struct MeasureGroup {
   double lidar_begin_time = 0.0;
   double lidar_end_time = 0.0;
 
-  pcl::PointCloud<PointXYZIT>::Ptr lidar;
+  pcl::PointCloud<FullPointType>::Ptr lidar;
   std::deque<sensor_msgs::msg::Imu> imu_datas;
   std::vector<ImuState> imu_states;
 };

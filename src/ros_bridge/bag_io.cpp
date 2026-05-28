@@ -10,7 +10,7 @@ BagIO::BagIO(const std::string& bag_path) : bag_path_(bag_path) {}
 
 void BagIO::run(std::function<void(const sensor_msgs::msg::Imu&)> imu_callback,
 
-                std::function<void(const pcl::PointCloud<PointXYZIT>::Ptr&)> cloud_callback) {
+                std::function<void(const pcl::PointCloud<FullPointType>::Ptr&)> cloud_callback) {
   rosbag2_cpp::Reader reader;
 
   reader.open(bag_path_);
@@ -39,7 +39,7 @@ void BagIO::run(std::function<void(const sensor_msgs::msg::Imu&)> imu_callback,
 
       serializer.deserialize_message(&serialized_msg, &cloud_msg);
 
-      pcl::PointCloud<PointXYZIT>::Ptr cloud(new pcl::PointCloud<PointXYZIT>());
+      pcl::PointCloud<FullPointType>::Ptr cloud(new pcl::PointCloud<FullPointType>());
 
       pcl::fromROSMsg(cloud_msg, *cloud);
 

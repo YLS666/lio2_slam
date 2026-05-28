@@ -1,5 +1,6 @@
 #include <iostream>
 #include "cloud_utils/cloud_processor.hpp"
+#include "frontend/frontend.hpp"
 #include "imu_utils/imu_processor.hpp"
 #include "ros_bridge/bag_io.hpp"
 #include "sync/time_sync.hpp"
@@ -8,6 +9,8 @@ int main() {
   ImuProcessor imu_processor;
 
   CloudProcessor cloud_processor;
+
+  std::shared_ptr<Frontend> frontend = std::make_shared<Frontend>();
 
   TimeSync time_sync(&imu_processor);
 
@@ -21,8 +24,11 @@ int main() {
         }
       },
 
-      [&](const pcl::PointCloud<PointXYZIT>::Ptr& cloud) {
-        time_sync.pushCloud(cloud);
+      [&](const pcl::PointCloud<FullPointType>::Ptr& cloud) {
+        pcl::PointCloud<FullPointType>::Ptr out_cloud(new pcl::PointCloud<FullPointType>());
+        cloud_processor.pre_process(cloud, out_cloud);  // 先过滤异常点并补全时间戳
+
+        time_sync.pushCloud(out_cloud);
 
         MeasureGroup measures;
 
@@ -33,7 +39,7 @@ int main() {
           }
           auto deskew_cloud = cloud_processor.process(measures, &imu_processor);
 
-          std::cout << "deskew done : " << deskew_cloud->size() << std::endl;
+          frontend->process(deskew_cloud);
         }
       });
 

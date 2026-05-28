@@ -16,14 +16,14 @@ class TimeSync {
 
   void pushImu(const sensor_msgs::msg::Imu& imu);
 
-  void pushCloud(pcl::PointCloud<PointXYZIT>::Ptr cloud);
+  void pushCloud(pcl::PointCloud<FullPointType>::Ptr cloud);
 
   bool syncMeasure(MeasureGroup& measures);
 
  private:
   std::deque<sensor_msgs::msg::Imu> imu_buffer_;
 
-  std::deque<pcl::PointCloud<PointXYZIT>::Ptr> cloud_buffer_;
+  std::deque<pcl::PointCloud<FullPointType>::Ptr> cloud_buffer_;
 
   ImuProcessor* imu_processor_;
 };

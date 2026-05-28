@@ -6,12 +6,12 @@
 #include <Eigen/Geometry>
 
 #include <sensor_msgs/msg/imu.hpp>
+#include <sophus/se3.hpp>
 
 struct ImuState {
   double timestamp = 0.0;
 
-  Eigen::Quaterniond q = Eigen::Quaterniond::Identity();
-  Eigen::Vector3d p = Eigen::Vector3d::Zero();
+  Sophus::SE3d T;
   Eigen::Vector3d v = Eigen::Vector3d::Zero();
   Eigen::Vector3d bg = Eigen::Vector3d::Zero();
   Eigen::Vector3d ba = Eigen::Vector3d::Zero();

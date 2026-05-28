@@ -82,9 +82,11 @@ add_executable(run_mapping
  src/app/run_lio_mapper.cpp
  src/cloud_utils/cloud_processor.cpp 
  src/imu_utils/imu_processor.cpp 
- src/registration/scan_to_map.cpp 
  src/ros_bridge/bag_io.cpp
  src/sync/time_sync.cpp
+ src/frontend/frontend.cpp 
+ src/frontend/registration.cpp
+ src/frontend/voxel_map.cpp
  )
 
 target_link_libraries(run_mapping 

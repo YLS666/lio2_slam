@@ -1,9 +1,10 @@
+#pragma once
 #include <Eigen/Dense>
 
 /**
  * @brief 计算向量的反对称矩阵
  */
-Eigen::Matrix3d skewSymmetric(const Eigen::Vector3d& v) {
+inline Eigen::Matrix3d skewSymmetric(const Eigen::Vector3d& v) {
   Eigen::Matrix3d m;
   m << 0.0, -v.z(), v.y(), v.z(), 0.0, -v.x(), -v.y(), v.x(), 0.0;
   return m;
@@ -12,7 +13,7 @@ Eigen::Matrix3d skewSymmetric(const Eigen::Vector3d& v) {
 /**
  * @brief 根据角速度计算增量旋转四元数
  */
-Eigen::Quaterniond deltaQ(const Eigen::Vector3d& omega) {
+inline Eigen::Quaterniond deltaQ(const Eigen::Vector3d& omega) {
   double theta = omega.norm();
 
   Eigen::Quaterniond dq;

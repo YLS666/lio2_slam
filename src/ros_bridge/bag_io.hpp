@@ -14,7 +14,7 @@ class BagIO {
 
   void run(std::function<void(const sensor_msgs::msg::Imu&)> imu_callback,
 
-           std::function<void(const pcl::PointCloud<PointXYZIT>::Ptr&)> cloud_callback);
+           std::function<void(const pcl::PointCloud<FullPointType>::Ptr&)> cloud_callback);
 
  private:
   std::string bag_path_;
