@@ -21,7 +21,7 @@ void Frontend::process(const pcl::PointCloud<PointType>::Ptr& cloud) {
 
   // init
   if (!initialized_) {
-    map_->addCloud(ds_cloud);
+    map_->addCloud(ds_cloud, state_.p);
     initialized_ = true;
     std::cout << "frontend init" << std::endl;
     return;
@@ -59,8 +59,9 @@ void Frontend::process(const pcl::PointCloud<PointType>::Ptr& cloud) {
   }
 
   // 6. update map
-  map_->addCloud(new_cloud);
+  map_->addCloud(new_cloud, state_.p);
   std::cout << "map add: " << new_cloud->size() << std::endl;
+  std::cout << "map size: " << map_->size() << std::endl;
   std::cout << "pose: " << state_.p.transpose() << std::endl;
 }
 

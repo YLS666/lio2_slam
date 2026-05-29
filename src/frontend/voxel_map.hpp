@@ -1,5 +1,6 @@
 #pragma once
 
+#include <mutex>
 #include <unordered_map>
 #include <vector>
 
@@ -30,23 +31,28 @@ struct VoxelHash {
 
 class VoxelMap {
  public:
-  explicit VoxelMap(float voxel_size = 0.2f);
+  explicit VoxelMap(float voxel_size = 0.2f, float local_radius = 20.0f);
 
   size_t size() const;
 
-  void addCloud(const pcl::PointCloud<PointType>::Ptr& cloud);
+  void addCloud(const pcl::PointCloud<PointType>::Ptr& cloud, const Eigen::Vector3d& center);
 
   bool nearestSearch(const PointType& pt, PointType& nearest_pt, float& nearest_dist);
-
-  pcl::PointCloud<PointType>::Ptr getCloud();
 
   bool hasNearbyPoint(const PointType& pt, float radius);
 
  private:
   VoxelKey posToKey(float x, float y, float z) const;
 
+  VoxelKey pointToVoxel(const PointType& pt) const;
+
+  void removeFarVoxels(const Eigen::Vector3d& center);
+
  private:
   float voxel_size_;
+  float local_radius_;
 
   std::unordered_map<VoxelKey, PointType, VoxelHash> voxel_map_;
+
+  mutable std::mutex mutex_;
 };
