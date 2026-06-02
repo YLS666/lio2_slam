@@ -43,6 +43,15 @@ class ImuProcessor {
   static constexpr int kInitSize = 200;
   double g_norm_ = 9.80665;
 
+  int init_attempt_ = 0;                      // 当前初始化尝试次数
+  static constexpr int kMaxInitAttempts = 5;  // 最大尝试次数（约 5*200 = 1000 帧）
+
+  static constexpr double kMaxStaticGyrVar = 0.5;   // 陀螺仪静态噪声最大方差
+  static constexpr double kMaxStaticAccVar = 0.05;  // 加速度计静态噪声最大方差
+
+  double acc_scale_ = 1.0;       // 加速度计放缩系数
+  Eigen::Vector3d gravity_dir_;  // 归一化重力方向
+
   std::deque<Eigen::Vector3d> init_accs_;
   std::deque<Eigen::Vector3d> init_gyrs_;
   std::deque<ImuState> states_;

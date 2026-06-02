@@ -2,6 +2,7 @@
 
 #include <pcl/common/transforms.h>
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/io/pcd_io.h>
 #include <chrono>
 #include <iostream>
 #include <mutex>
@@ -23,7 +24,7 @@ void Frontend::process(const pcl::PointCloud<PointType>::Ptr& cloud) {
 
   // 初始化
   if (!initialized_) {
-    map_->addCloud(ds_cloud, state_.p);
+    map_->addCloud(ds_cloud);
     map_->setLocalCenter(state_.p);
     initialized_ = true;
     std::cout << "frontend init" << std::endl;
@@ -60,7 +61,7 @@ void Frontend::process(const pcl::PointCloud<PointType>::Ptr& cloud) {
   }
 
   // 6. 更新地图
-  map_->addCloud(new_cloud, state_.p);
+  map_->addCloud(new_cloud);
   std::cout << "map add: " << new_cloud->size() << std::endl;
   std::cout << "map size: " << map_->size() << std::endl;
   std::cout << "pose: " << state_.p.transpose() << std::endl;
@@ -95,4 +96,10 @@ pcl::PointCloud<PointType>::Ptr Frontend::featureSample(const pcl::PointCloud<Po
   }
 
   return out;
+}
+
+void Frontend::saveMap(const std::string& filename) const {
+  auto cloud = map_->getCloud();
+  pcl::io::savePCDFileBinary(filename, *cloud);
+  std::cout << "地图保存完成：" << filename << ",  点数：" << cloud->size() << std::endl;
 }

@@ -16,6 +16,8 @@ class Frontend {
 
   pcl::PointCloud<PointType>::Ptr featureSample(const pcl::PointCloud<PointType>::Ptr& cloud);
 
+  void saveMap(const std::string& filename) const;
+
  private:
   std::unique_ptr<VoxelMap> map_;
   Registration registration_;

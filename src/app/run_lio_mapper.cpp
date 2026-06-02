@@ -43,5 +43,7 @@ int main() {
         }
       });
 
+  frontend->saveMap("/home/yls/test_data/fast_lio_ros2/map/yancheng_1102_5_6_map.pcd");
+
   return 0;
 }

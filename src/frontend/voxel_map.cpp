@@ -43,7 +43,7 @@ BlockKey VoxelMap::voxelToBlock(const VoxelKey& vkey) const {
   return {vkey.x / vperblock, vkey.y / vperblock, vkey.z / vperblock};
 }
 
-void VoxelMap::addCloud(const pcl::PointCloud<PointType>::Ptr& cloud, const Eigen::Vector3d& center) {
+void VoxelMap::addCloud(const pcl::PointCloud<PointType>::Ptr& cloud) {
   for (const auto& pt : cloud->points) {
     VoxelKey key = pointToVoxel(pt);
     // insert 如果已存在则不覆盖（保持第一个点）
@@ -146,35 +146,27 @@ void VoxelMap::setLocalCenter(const Eigen::Vector3d& center) {
     }
   }
 
-  // 卸载不再需要的区块中的体素
-  for (const auto& [bkey, _] : active_blocks_) {
-    if (new_active.find(bkey) == new_active.end()) {
-      unloadBlock(bkey);
+  // 【优化】遍历所有真实存在的体素，删除不在新活跃集合中的体素
+  // 复杂度: O(active_voxels) 而不是 O(blocks * vperblock^3)
+  for (auto iter = voxel_map_.begin(); iter != voxel_map_.end();) {
+    BlockKey bk = voxelToBlock(iter->first);
+    if (new_active.find(bk) == new_active.end()) {
+      iter = voxel_map_.unsafe_erase(iter);
+    } else {
+      ++iter;
     }
   }
 
   active_blocks_ = std::move(new_active);
 }
 
-void VoxelMap::loadBlock(const BlockKey& bkey) {
-  // 区块加载在此处不需要做任何事，因为 addCloud 是按需插入的
-  // 只需要在 active_blocks_ 中标记即可
-  active_blocks_.insert({bkey, 1});
-}
+pcl::PointCloud<PointType>::Ptr VoxelMap::getCloud() const {
+  pcl::PointCloud<PointType>::Ptr cloud(new pcl::PointCloud<PointType>());
+  cloud->reserve(voxel_map_.size());
 
-void VoxelMap::unloadBlock(const BlockKey& bkey) {
-  // 删除该区块中的所有体素
-  int vperblock = static_cast<int>(std::floor(block_size_ / voxel_size_));
-  int start_x = bkey.bx * vperblock;
-  int start_y = bkey.by * vperblock;
-  int start_z = bkey.bz * vperblock;
-
-  for (int dx = 0; dx < vperblock; ++dx) {
-    for (int dy = 0; dy < vperblock; ++dy) {
-      for (int dz = 0; dz < vperblock; ++dz) {
-        VoxelKey vk{start_x + dx, start_y + dy, start_z + dz};
-        voxel_map_.unsafe_erase(vk);
-      }
-    }
+  for (const auto& kv : voxel_map_) {
+    cloud->push_back(kv.second);
   }
+
+  return cloud;
 }

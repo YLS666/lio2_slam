@@ -19,13 +19,13 @@ struct VoxelKey {
 };
 
 struct VoxelHash {
+  // 质数乘法哈希函数，减少碰撞
   size_t operator()(const VoxelKey& k) const {
-    size_t seed = 0;
-    seed ^= std::hash<int>()(k.x) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    seed ^= std::hash<int>()(k.y) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    seed ^= std::hash<int>()(k.z) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-
-    return seed;
+    // boost::hash_combine 风格的优化版本
+    size_t h = static_cast<size_t>(k.x) * 73856093;
+    h ^= static_cast<size_t>(k.y) * 19349663;
+    h ^= static_cast<size_t>(k.z) * 83492791;
+    return h;
   }
 };
 
@@ -65,12 +65,14 @@ class VoxelMap {
 
   size_t size() const;
 
-  void addCloud(const pcl::PointCloud<PointType>::Ptr& cloud, const Eigen::Vector3d& center);
+  void addCloud(const pcl::PointCloud<PointType>::Ptr& cloud);
 
   bool nearestSearch(const PointType& pt, PointType& nearest_pt, float& nearest_dist,
                      NearbyType nearby = NearbyType::NEARBY6) const;
 
   bool hasNearbyPoint(const PointType& pt, float radius, NearbyType nearby = NearbyType::NEARBY6) const;
+
+  pcl::PointCloud<PointType>::Ptr getCloud() const;
 
   // 设置新的局部中心点，触发区块加载/卸载
   void setLocalCenter(const Eigen::Vector3d& center);

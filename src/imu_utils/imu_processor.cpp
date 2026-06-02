@@ -30,33 +30,92 @@ void ImuProcessor::initializeImu(double t, const Eigen::Vector3d& gyr, const Eig
     return;
   }
 
+  // 1. 计算均值
   Eigen::Vector3d mean_gyr = Eigen::Vector3d::Zero();
   Eigen::Vector3d mean_acc = Eigen::Vector3d::Zero();
 
   for (const auto& g : init_gyrs_) {
     mean_gyr += g;
   }
-
   for (const auto& a : init_accs_) {
     mean_acc += a;
   }
-
   mean_gyr /= init_gyrs_.size();
   mean_acc /= init_accs_.size();
 
-  // gyro bias
+  // 2. 计算协方差
+  Eigen::Vector3d cov_gyr = Eigen::Vector3d::Zero();
+  Eigen::Vector3d cov_acc = Eigen::Vector3d::Zero();
+
+  for (size_t i = 0; i < init_gyrs_.size(); ++i) {
+    Eigen::Vector3d dg = init_gyrs_[i] - mean_gyr;
+    Eigen::Vector3d da = init_accs_[i] - mean_acc;
+
+    cov_gyr += dg.cwiseProduct(dg);
+    cov_acc += da.cwiseProduct(da);
+  }
+  cov_gyr /= init_gyrs_.size();
+  cov_acc /= init_accs_.size();
+
+  std::cout << "cov_gyr = " << cov_gyr.transpose() << " (norm=" << cov_gyr.norm() << ")" << std::endl;
+  std::cout << "cov_acc = " << cov_acc.transpose() << " (norm=" << cov_acc.norm() << ")" << std::endl;
+
+  // 3. 检查是否满足静止条件（噪声足够小）+ 重试机制
+  if (cov_gyr.norm() > kMaxStaticGyrVar || cov_acc.norm() > kMaxStaticAccVar) {
+    init_attempt_++;
+    std::cout << "IMU 噪声过大（可能是运动中），正在重试... "
+              << "尝试次数 " << init_attempt_ << " / " << kMaxInitAttempts << std::endl;
+
+    if (init_attempt_ >= kMaxInitAttempts) {
+      // 达到最大重试次数：使用降级策略，用默认值初始化
+      std::cout << "IMU 初始化达到最大尝试次数，使用降级默认值" << std::endl;
+
+      // 零偏使用当前均值（虽然可能有误差，但比0好）
+      bg_ = mean_gyr;
+      ba_.setZero();
+
+      // 重力：使用 mean_acc 方向，长度归一化为 9.80665
+      gravity_dir_ = -mean_acc.normalized();
+      acc_scale_ = g_norm_ / mean_acc.norm();
+      Eigen::Quaterniond q0 = Eigen::Quaterniond::FromTwoVectors(gravity_dir_, Eigen::Vector3d(0, 0, -1));
+
+      ImuState init_state;
+      init_state.timestamp = t;
+      init_state.T = Sophus::SE3d(q0, Eigen::Vector3d::Zero());
+      init_state.v.setZero();
+      init_state.bg = bg_;
+      init_state.ba = ba_;
+
+      states_.push_back(init_state);
+      initialized_ = true;
+
+      std::cout << "========== IMU INIT (FALLBACK) ==========" << std::endl;
+      std::cout << "bg = " << bg_.transpose() << std::endl;
+      std::cout << "ba = " << ba_.transpose() << std::endl;
+      std::cout << "acc_scale_ = " << acc_scale_ << std::endl;
+      std::cout << "IMU init success (fallback)." << std::endl << std::endl;
+    } else {
+      // 未达到最大次数：清空数据，重新采样
+      init_gyrs_.clear();
+      init_accs_.clear();
+      init_count_ = 0;
+    }
+    return;
+  }
+
+  // 4. 初始化成功：设置零偏
   bg_ = mean_gyr;
+  ba_.setZero();  // 静止时加速度计偏置不可观，设为0
 
-  // accel bias
-  // cannot fully observe during static
-  // initialize as zero
-  ba_.setZero();
+  // 5. 重力缩放
+  // 使用 mean_acc 精确校准重力方向和大小
+  gravity_dir_ = -mean_acc.normalized();
+  acc_scale_ = g_norm_ / mean_acc.norm();  // 缩放系数
 
-  // gravity direction
-  Eigen::Vector3d gravity_dir = -mean_acc.normalized();
-  Eigen::Vector3d world_gravity(0, 0, -1);
-  Eigen::Quaterniond q0 = Eigen::Quaterniond::FromTwoVectors(gravity_dir, world_gravity);
+  // 使用精确的重力方向计算初始姿态
+  Eigen::Quaterniond q0 = Eigen::Quaterniond::FromTwoVectors(gravity_dir_, Eigen::Vector3d(0, 0, -1));
 
+  // 6. 创建初始状态
   ImuState init_state;
   init_state.timestamp = t;
   init_state.T = Sophus::SE3d(q0, Eigen::Vector3d::Zero());
@@ -65,17 +124,21 @@ void ImuProcessor::initializeImu(double t, const Eigen::Vector3d& gyr, const Eig
   init_state.ba = ba_;
 
   states_.push_back(init_state);
-
   initialized_ = true;
 
   std::cout << std::endl;
   std::cout << "========== IMU INIT ==========" << std::endl;
   std::cout << "imu samples : " << init_count_ << std::endl;
-  std::cout << "bg = " << bg_.transpose() << std::endl;
-  std::cout << "ba = " << ba_.transpose() << std::endl;
-  std::cout << "gravity = " << gravity_.transpose() << std::endl;
-  std::cout << "mean acc = " << mean_acc.transpose() << std::endl;
-  std::cout << "init quaternion : " << std::endl << q0.coeffs().transpose() << std::endl;
+  std::cout << "cov_gyr     = " << cov_gyr.transpose() << " (norm=" << cov_gyr.norm() << ")" << std::endl;
+  std::cout << "cov_acc     = " << cov_acc.transpose() << " (norm=" << cov_acc.norm() << ")" << std::endl;
+  std::cout << "bg          = " << bg_.transpose() << std::endl;
+  std::cout << "ba          = " << ba_.transpose() << std::endl;
+  std::cout << "mean acc    = " << mean_acc.transpose() << " (norm=" << mean_acc.norm() << ")" << std::endl;
+  std::cout << "mean gyr    = " << mean_gyr.transpose() << " (norm=" << mean_gyr.norm() << ")" << std::endl;
+  std::cout << "acc_scale   = " << acc_scale_ << std::endl;
+  std::cout << "gravity_dir = " << gravity_dir_.transpose() << std::endl;
+  std::cout << "grav        = " << (gravity_dir_ / gravity_dir_.norm() * g_norm_).transpose() << std::endl;
+  std::cout << "init quat   = " << q0.coeffs().transpose() << std::endl;
   std::cout << "IMU init success." << std::endl << std::endl;
 }
 
