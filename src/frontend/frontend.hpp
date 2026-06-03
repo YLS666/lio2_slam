@@ -18,6 +18,8 @@ class Frontend {
 
   void saveMap(const std::string& filename) const;
 
+  State getState() const { return state_; }
+
  private:
   std::unique_ptr<VoxelMap> map_;
   Registration registration_;

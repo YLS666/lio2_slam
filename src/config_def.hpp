@@ -65,11 +65,12 @@ class AllConfig {
       return false;
     }
     r_imu_lidar = config["r_imu_lidar"].as<std::vector<double>>();
-    return true;
 
     if (!config["g_norm"]) {
       return false;
     }
     g_norm = config["g_norm"].as<double>();
+
+    return true;
   };
 };

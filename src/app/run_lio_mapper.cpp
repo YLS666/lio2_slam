@@ -2,8 +2,10 @@
 #include "cloud_utils/cloud_processor.hpp"
 #include "config_def.hpp"
 #include "frontend/frontend.hpp"
+#include "frontend/state.hpp"
 #include "imu_utils/imu_processor.hpp"
 #include "ros_bridge/bag_io.hpp"
+#include "sophus/se3.hpp"
 #include "sync/time_sync.hpp"
 
 int main() {
@@ -18,6 +20,7 @@ int main() {
   TimeSync time_sync(&imu_processor);
 
   BagIO bag(config);
+  // int frame_count = 0;  // 记录帧数，用于保存map文件名
   bag.run(
       [&](const sensor_msgs::msg::Imu& imu_msg) {
         if (imu_processor.processImu(imu_msg)) {
@@ -40,6 +43,8 @@ int main() {
           auto deskew_cloud = cloud_processor.process(measures, &imu_processor);
 
           frontend->process(deskew_cloud);
+          // frontend->saveMap(config.save_map_path + "map_" + std::to_string(frame_count) + ".pcd");  // 保存当前map
+          // frame_count++;
         }
       });
 
