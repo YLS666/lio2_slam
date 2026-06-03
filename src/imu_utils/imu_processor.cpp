@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <iomanip>
 #include <iostream>
+#include "config_def.hpp"
 #include "utils/eigen_types.hpp"
 
-ImuProcessor::ImuProcessor() {
+ImuProcessor::ImuProcessor(AllConfig& config) {
+  g_norm_ = config.g_norm;  // 9.80665 m/s²
   gravity_ = Eigen::Vector3d(0, 0, -g_norm_);
   bg_.setZero();
   ba_.setZero();

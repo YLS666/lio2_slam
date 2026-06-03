@@ -1,6 +1,10 @@
-imu_topic: /ns1102/livox/imu
+bag_file: /home/yls/test_data/fast_lio_ros2/bag/bisai
 
-lidar_topic: /ns1102/livox/lidar
+save_map_path: /home/yls/test_data/fast_lio_ros2/map/
+
+imu_topic: /ns1/livox/imu_192_188_1_2
+
+lidar_topic: /ns1/livox/lidar_192_188_1_2
 
 odom_topic: /odom
 
@@ -12,3 +16,5 @@ deskew_cloud_topic: /deskew_cloud
 t_imu_lidar: [ -0.011, -0.02329, 0.04412 ]
 
 r_imu_lidar: [ 1, 0, 0, 0, 1, 0, 0, 0, 1 ]
+
+g_norm: 9.80655

@@ -7,6 +7,7 @@
 
 #include <sensor_msgs/msg/imu.hpp>
 #include <sophus/se3.hpp>
+#include "config_def.hpp"
 
 struct ImuState {
   double timestamp = 0.0;
@@ -19,7 +20,7 @@ struct ImuState {
 
 class ImuProcessor {
  public:
-  ImuProcessor();
+  explicit ImuProcessor(AllConfig& config);
 
   bool processImu(const sensor_msgs::msg::Imu& imu);
 

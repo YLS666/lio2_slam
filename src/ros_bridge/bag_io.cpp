@@ -6,7 +6,11 @@
 #include "rosbag2_cpp/reader.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 
-BagIO::BagIO(const std::string& bag_path) : bag_path_(bag_path) {}
+BagIO::BagIO(AllConfig& config) {
+  bag_path_ = config.bag_file;
+  imu_topic_ = config.imu_topic;
+  lidar_topic_ = config.lidar_topic;
+}
 
 void BagIO::run(std::function<void(const sensor_msgs::msg::Imu&)> imu_callback,
 
@@ -18,7 +22,7 @@ void BagIO::run(std::function<void(const sensor_msgs::msg::Imu&)> imu_callback,
   while (reader.has_next()) {
     auto msg = reader.read_next();
 
-    if (msg->topic_name == "/ns1102/livox/imu") {
+    if (msg->topic_name == imu_topic_) {
       rclcpp::SerializedMessage serialized_msg(*msg->serialized_data);
 
       sensor_msgs::msg::Imu imu_msg;
@@ -30,7 +34,7 @@ void BagIO::run(std::function<void(const sensor_msgs::msg::Imu&)> imu_callback,
       imu_callback(imu_msg);
     }
 
-    else if (msg->topic_name == "/ns1102/livox/lidar") {
+    else if (msg->topic_name == lidar_topic_) {
       rclcpp::SerializedMessage serialized_msg(*msg->serialized_data);
 
       sensor_msgs::msg::PointCloud2 cloud_msg;

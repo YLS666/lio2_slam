@@ -4,6 +4,7 @@
 
 #include <pcl/point_cloud.h>
 #include "cloud_utils/point_type.hpp"
+#include "config_def.hpp"
 #include "imu_utils/imu_processor.hpp"
 #include "measure/measure_group.hpp"
 
@@ -14,9 +15,9 @@ struct PoseCache {
 
 class CloudProcessor {
  public:
-  pcl::PointCloud<PointType>::Ptr process(const MeasureGroup& measures, ImuProcessor* imu_processor);
+  explicit CloudProcessor(AllConfig& config);
 
-  void setExtrinsic(const Eigen::Quaterniond& q, const Eigen::Vector3d& t);
+  pcl::PointCloud<PointType>::Ptr process(const MeasureGroup& measures, ImuProcessor* imu_processor);
 
   void pre_process(const pcl::PointCloud<FullPointType>::Ptr& cloud, pcl::PointCloud<FullPointType>::Ptr& out_cloud);
 

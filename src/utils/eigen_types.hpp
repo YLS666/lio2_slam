@@ -1,5 +1,7 @@
 #pragma once
 #include <Eigen/Dense>
+#include <Eigen/Geometry>
+#include <vector>
 
 /**
  * @brief 计算向量的反对称矩阵
@@ -30,4 +32,14 @@ inline Eigen::Quaterniond deltaQ(const Eigen::Vector3d& omega) {
   }
 
   return dq.normalized();
+}
+
+/**
+ * @brief vector数组 转 Matrix3d 旋转矩阵
+ */
+inline Eigen::Matrix3d vecToMat(std::vector<double>& mat_vec) {
+  if (mat_vec.size() != 9) {
+    throw std::invalid_argument("Input vector must have 9 elements");
+  }
+  return Eigen::Map<Eigen::Matrix<double, 3, 3, Eigen::RowMajor>>(mat_vec.data());
 }

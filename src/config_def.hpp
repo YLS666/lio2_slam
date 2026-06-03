@@ -1,3 +1,5 @@
+#pragma once
+
 #include <string>
 #include <vector>
 #include "yaml-cpp/yaml.h"
@@ -6,6 +8,8 @@ class AllConfig {
  public:
   explicit AllConfig() = default;
   ~AllConfig() = default;
+  std::string bag_file;
+  std::string save_map_path;
   std::string imu_topic;
   std::string lidar_topic;
   std::string odom_topic;
@@ -13,9 +17,20 @@ class AllConfig {
   std::string deskew_cloud_topic;
   std::vector<double> t_imu_lidar;
   std::vector<double> r_imu_lidar;
+  double g_norm;
 
   bool init(std::string config_file_path) {
     YAML::Node config = YAML::LoadFile(config_file_path);
+    if (!config["bag_file"]) {
+      return false;
+    }
+    bag_file = config["bag_file"].as<std::string>();
+
+    if (!config["save_map_path"]) {
+      return false;
+    }
+    save_map_path = config["save_map_path"].as<std::string>();
+
     if (!config["imu_topic"]) {
       return false;
     }
@@ -51,5 +66,10 @@ class AllConfig {
     }
     r_imu_lidar = config["r_imu_lidar"].as<std::vector<double>>();
     return true;
+
+    if (!config["g_norm"]) {
+      return false;
+    }
+    g_norm = config["g_norm"].as<double>();
   };
 };

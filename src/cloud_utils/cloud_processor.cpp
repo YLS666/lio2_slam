@@ -6,10 +6,12 @@
 #include <chrono>
 #include <sophus/se3.hpp>
 #include "cloud_utils/point_type.hpp"
+#include "config_def.hpp"
+#include "utils/eigen_types.hpp"
 
-void CloudProcessor::setExtrinsic(const Eigen::Quaterniond& q, const Eigen::Vector3d& t) {
-  q_il_ = q;
-  t_il_ = t;
+CloudProcessor::CloudProcessor(AllConfig& config) {
+  q_il_ = vecToMat(config.r_imu_lidar).normalized();
+  t_il_ = Eigen::Vector3d(config.t_imu_lidar.data());
 }
 
 void CloudProcessor::pre_process(const pcl::PointCloud<FullPointType>::Ptr& cloud,

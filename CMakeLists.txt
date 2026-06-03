@@ -17,12 +17,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_compile_options (-fdiagnostics-color=always)
 add_compile_options(-O3 -march=native -ffast-math -funroll-loops)
-add_compile_options(-flto=4)
-
-# 启用 OpenMP，并行编译
-find_package(OpenMP REQUIRED)
-add_compile_options(${OpenMP_CXX_FLAGS})
-add_link_options(${OpenMP_CXX_FLAGS})
 
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)

@@ -1,29 +1,29 @@
 #include <iostream>
 #include "cloud_utils/cloud_processor.hpp"
+#include "config_def.hpp"
 #include "frontend/frontend.hpp"
 #include "imu_utils/imu_processor.hpp"
 #include "ros_bridge/bag_io.hpp"
 #include "sync/time_sync.hpp"
 
 int main() {
-  ImuProcessor imu_processor;
+  std::string CONFIG_PATH = "/home/yls/test_ros/src/lio2_slam/config/config.yaml";
 
-  CloudProcessor cloud_processor;
+  AllConfig config;
+  config.init(CONFIG_PATH);
 
+  ImuProcessor imu_processor(config);
+  CloudProcessor cloud_processor(config);
   std::shared_ptr<Frontend> frontend = std::make_shared<Frontend>();
-
   TimeSync time_sync(&imu_processor);
 
-  BagIO bag("/home/yls/test_data/fast_lio_ros2/bag/yancheng_1102_5_6");
-
+  BagIO bag(config);
   bag.run(
-
       [&](const sensor_msgs::msg::Imu& imu_msg) {
         if (imu_processor.processImu(imu_msg)) {
           time_sync.pushImu(imu_msg);
         }
       },
-
       [&](const pcl::PointCloud<FullPointType>::Ptr& cloud) {
         pcl::PointCloud<FullPointType>::Ptr out_cloud(new pcl::PointCloud<FullPointType>());
         cloud_processor.pre_process(cloud, out_cloud);  // 先过滤异常点并补全时间戳
@@ -43,7 +43,7 @@ int main() {
         }
       });
 
-  frontend->saveMap("/home/yls/test_data/fast_lio_ros2/map/yancheng_1102_5_6_map.pcd");
+  frontend->saveMap(config.save_map_path + "all_map.pcd");
 
   return 0;
 }
