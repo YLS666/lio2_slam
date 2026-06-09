@@ -1,28 +1,27 @@
 #pragma once
 
-#include <Eigen/Dense>
-
 #include <pcl/point_cloud.h>
 #include "cloud_utils/point_type.hpp"
 #include "config_def.hpp"
 #include "imu_utils/imu_processor.hpp"
 #include "measure/measure_group.hpp"
+#include "utils/eigen_types.hpp"
 
 struct PoseCache {
-  Eigen::Matrix3d R;
-  Eigen::Vector3d t;
+  M3d R;
+  V3d t;
 };
 
 class CloudProcessor {
  public:
   explicit CloudProcessor(AllConfig& config);
 
-  pcl::PointCloud<PointType>::Ptr process(const MeasureGroup& measures, ImuProcessor* imu_processor);
+  CloudPtr process(const MeasureGroup& measures, ImuProcessor* imu_processor);
 
-  void pre_process(const pcl::PointCloud<FullPointType>::Ptr& cloud, pcl::PointCloud<FullPointType>::Ptr& out_cloud);
+  void pre_process(const FullCloudPtr& cloud, FullCloudPtr& out_cloud);
 
  private:
-  Eigen::Quaterniond q_il_ = Eigen::Quaterniond::Identity();
-  Eigen::Vector3d t_il_ = Eigen::Vector3d::Zero();
+  Qd q_il_ = Qd::Identity();
+  V3d t_il_ = V3d::Zero();
   std::vector<PoseCache> pose_table_;
 };

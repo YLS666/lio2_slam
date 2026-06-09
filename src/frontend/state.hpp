@@ -1,14 +1,11 @@
 #pragma once
 
-#include <Eigen/Core>
-#include <Eigen/Geometry>
+#include "utils/eigen_types.hpp"
 
 struct State {
-  Eigen::Quaterniond q;
-
-  Eigen::Vector3d p;
-
-  Eigen::Vector3d v;
+  Qd q;
+  V3d p;
+  V3d v;
 
   State() {
     q.setIdentity();

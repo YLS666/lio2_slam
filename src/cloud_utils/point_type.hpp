@@ -3,6 +3,7 @@
 #include <pcl/impl/point_types.hpp>
 #define PCL_NO_PRECOMPILE
 
+#include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/register_point_struct.h>
 
@@ -20,3 +21,8 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(FullPointType,
                                                                           intensity)(double, timestamp, timestamp))
 
 using PointType = pcl::PointXYZI;
+using PointCloudType = pcl::PointCloud<PointType>;
+using CloudPtr = PointCloudType::Ptr;
+
+using FullCloudPointType = pcl::PointCloud<FullPointType>;
+using FullCloudPtr = FullCloudPointType::Ptr;

@@ -2,20 +2,17 @@
 
 #include <deque>
 
-#include <Eigen/Core>
-#include <Eigen/Geometry>
-
 #include <sensor_msgs/msg/imu.hpp>
-#include <sophus/se3.hpp>
 #include "config_def.hpp"
+#include "utils/eigen_types.hpp"
 
 struct ImuState {
   double timestamp = 0.0;
 
-  Sophus::SE3d T;
-  Eigen::Vector3d v = Eigen::Vector3d::Zero();
-  Eigen::Vector3d bg = Eigen::Vector3d::Zero();
-  Eigen::Vector3d ba = Eigen::Vector3d::Zero();
+  SE3 T;
+  V3d v = V3d::Zero();
+  V3d bg = V3d::Zero();
+  V3d ba = V3d::Zero();
 };
 
 class ImuProcessor {
@@ -31,10 +28,10 @@ class ImuProcessor {
   const std::deque<ImuState>& getStates() const;
 
   // online update interface
-  void updateBias(const Eigen::Vector3d& bg, const Eigen::Vector3d& ba);
+  void updateBias(const V3d& bg, const V3d& ba);
 
  private:
-  void initializeImu(double t, const Eigen::Vector3d& gyr, const Eigen::Vector3d& acc);
+  void initializeImu(double t, const V3d& gyr, const V3d& acc);
 
  private:
   bool initialized_ = false;
@@ -50,14 +47,14 @@ class ImuProcessor {
   static constexpr double kMaxStaticGyrVar = 0.5;   // 陀螺仪静态噪声最大方差
   static constexpr double kMaxStaticAccVar = 0.05;  // 加速度计静态噪声最大方差
 
-  double acc_scale_ = 1.0;       // 加速度计放缩系数
-  Eigen::Vector3d gravity_dir_;  // 归一化重力方向
+  double acc_scale_ = 1.0;  // 加速度计放缩系数
+  V3d gravity_dir_;         // 归一化重力方向
 
-  std::deque<Eigen::Vector3d> init_accs_;
-  std::deque<Eigen::Vector3d> init_gyrs_;
+  std::deque<V3d> init_accs_;
+  std::deque<V3d> init_gyrs_;
   std::deque<ImuState> states_;
 
-  Eigen::Vector3d gravity_;
-  Eigen::Vector3d bg_;
-  Eigen::Vector3d ba_;
+  V3d gravity_;
+  V3d bg_;
+  V3d ba_;
 };

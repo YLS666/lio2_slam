@@ -1,9 +1,5 @@
 #include "frontend/voxel_map.hpp"
-#include <Eigen/src/Core/Matrix.h>
-
-#include <cmath>
-#include <limits>
-#include <vector>
+#include "cloud_utils/point_type.hpp"
 
 const std::vector<VoxelKey> VoxelMap::kNeighborOffset7{
     {0, 0, 0},   // 中心
@@ -43,7 +39,7 @@ BlockKey VoxelMap::voxelToBlock(const VoxelKey& vkey) const {
   return {vkey.x / vperblock, vkey.y / vperblock, vkey.z / vperblock};
 }
 
-void VoxelMap::addCloud(const pcl::PointCloud<PointType>::Ptr& cloud) {
+void VoxelMap::addCloud(const CloudPtr& cloud) {
   for (const auto& pt : cloud->points) {
     VoxelKey key = pointToVoxel(pt);
     // insert 如果已存在则不覆盖（保持第一个点）
@@ -120,7 +116,7 @@ bool VoxelMap::hasNearbyPoint(const PointType& pt, float radius, NearbyType near
   return false;
 }
 
-void VoxelMap::setLocalCenter(const Eigen::Vector3d& center) {
+void VoxelMap::setLocalCenter(const V3d& center) {
   // 将中心点转换为区块坐标
   int vperblock = static_cast<int>(std::floor(block_size_ / voxel_size_));
   VoxelKey center_voxel{static_cast<int>(std::floor(center.x() / voxel_size_)),
@@ -146,8 +142,7 @@ void VoxelMap::setLocalCenter(const Eigen::Vector3d& center) {
     }
   }
 
-  // 【优化】遍历所有真实存在的体素，删除不在新活跃集合中的体素
-  // 复杂度: O(active_voxels) 而不是 O(blocks * vperblock^3)
+  // 遍历所有真实存在的体素，删除不在新活跃集合中的体素
   for (auto iter = voxel_map_.begin(); iter != voxel_map_.end();) {
     BlockKey bk = voxelToBlock(iter->first);
     if (new_active.find(bk) == new_active.end()) {
@@ -160,8 +155,8 @@ void VoxelMap::setLocalCenter(const Eigen::Vector3d& center) {
   active_blocks_ = std::move(new_active);
 }
 
-pcl::PointCloud<PointType>::Ptr VoxelMap::getCloud() const {
-  pcl::PointCloud<PointType>::Ptr cloud(new pcl::PointCloud<PointType>());
+CloudPtr VoxelMap::getCloud() const {
+  CloudPtr cloud(new PointCloudType());
   cloud->reserve(voxel_map_.size());
 
   for (const auto& kv : voxel_map_) {

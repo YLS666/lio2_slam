@@ -1,9 +1,4 @@
 #include "estimator/eskf.hpp"
-#include <Eigen/src/Core/Matrix.h>
-#include <Eigen/src/Geometry/Quaternion.h>
-#include <iostream>
-#include "sophus/so3.hpp"
-#include "utils/eigen_types.hpp"
 
 ESKF::ESKF() { reset(); }
 
@@ -24,7 +19,7 @@ void ESKF::reset() {
   initialized_ = false;
 }
 
-void ESKF::setState(const Eigen::Quaterniond& q, const Eigen::Vector3d& p, const Eigen::Vector3d& v) {
+void ESKF::setState(const Qd& q, const V3d& p, const V3d& v) {
   q_ = q.normalized();
   p_ = p;
   v_ = v;
@@ -32,7 +27,7 @@ void ESKF::setState(const Eigen::Quaterniond& q, const Eigen::Vector3d& p, const
   initialized_ = true;
 }
 
-void ESKF::predict(const Eigen::Vector3d& gyr, const Eigen::Vector3d& acc, double dt, const Eigen::Vector3d& gravity) {
+void ESKF::predict(const V3d& gyr, const V3d& acc, double dt, const V3d& gravity) {
   if (!initialized_) {
     return;
   }
@@ -41,26 +36,26 @@ void ESKF::predict(const Eigen::Vector3d& gyr, const Eigen::Vector3d& acc, doubl
   }
 
   // 1.名义状态传播
-  Eigen::Quaterniond dq = deltaQ(gyr * dt);  // 姿态: q_{k+1} = q_k ⊗ exp(gyr * dt)
-  Eigen::Quaterniond q_new = (q_ * dq).normalized();
-  Eigen::Matrix3d R = q_.toRotationMatrix();                         // 旋转矩阵
-  Eigen::Vector3d acc_world = R * acc + gravity;                     // 世界坐标系下的加速度
-  Eigen::Vector3d p_new = p_ + v_ * dt + 0.5 * acc_world * dt * dt;  // 位置
-  Eigen::Vector3d v_new = v_ + acc_world * dt;                       // 速度
+  Qd dq = deltaQ(gyr * dt);  // 姿态: q_{k+1} = q_k ⊗ exp(gyr * dt)
+  Qd q_new = (q_ * dq).normalized();
+  M3d R = q_.toRotationMatrix();                         // 旋转矩阵
+  V3d acc_world = R * acc + gravity;                     // 世界坐标系下的加速度
+  V3d p_new = p_ + v_ * dt + 0.5 * acc_world * dt * dt;  // 位置
+  V3d v_new = v_ + acc_world * dt;                       // 速度
 
   // 2.协方差传播
   Eigen::Matrix<double, 9, 9> F = Eigen::Matrix<double, 9, 9>::Identity();  // 状态转移矩阵
-  Eigen::Matrix3d acc_skew = skewSymmetric(acc);                            // 加速度的 skew-symmetric矩阵
-  F.block<3, 3>(3, 6) = Eigen::Matrix3d::Identity() * dt;                   // 位置
+  M3d acc_skew = skewSymmetric(acc);                                        // 加速度的 skew-symmetric矩阵
+  F.block<3, 3>(3, 6) = M3d::Identity() * dt;                               // 位置
   F.block<3, 3>(6, 0) = -R * acc_skew * dt;                                 // 速度
 
   Eigen::Matrix<double, 9, 6> G = Eigen::Matrix<double, 9, 6>::Zero();  // 噪声输入矩阵
-  G.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity() * dt;               // 位置
+  G.block<3, 3>(0, 0) = M3d::Identity() * dt;                           // 位置
   G.block<3, 3>(6, 3) = R * dt;                                         // 速度
 
-  Eigen::Matrix<double, 6, 6> Q = Eigen::Matrix<double, 6, 6>::Zero();                               // 离散噪声协方差
-  Q.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity() * gyr_noise_density_ * gyr_noise_density_ * dt;  // 陀螺仪噪声
-  Q.block<3, 3>(3, 3) = Eigen::Matrix3d::Identity() * acc_noise_density_ * acc_noise_density_ * dt;  // 加速度计噪声
+  Eigen::Matrix<double, 6, 6> Q = Eigen::Matrix<double, 6, 6>::Zero();                   // 离散噪声协方差
+  Q.block<3, 3>(0, 0) = M3d::Identity() * gyr_noise_density_ * gyr_noise_density_ * dt;  // 陀螺仪噪声
+  Q.block<3, 3>(3, 3) = M3d::Identity() * acc_noise_density_ * acc_noise_density_ * dt;  // 加速度计噪声
 
   // 协方差传播：P = F*P*F^T + G*Q*G^T
   // 不更新bias噪声
@@ -76,21 +71,21 @@ void ESKF::predict(const Eigen::Vector3d& gyr, const Eigen::Vector3d& acc, doubl
   dx_.setZero();  // 误差状态清零
 }
 
-void ESKF::observePose(const Eigen::Quaterniond& q_obs, const Eigen::Vector3d& p_obs) {
+void ESKF::observePose(const Qd& q_obs, const V3d& p_obs) {
   if (!initialized_) {
-    setState(q_obs, p_obs, Eigen::Vector3d::Zero());
+    setState(q_obs, p_obs, V3d::Zero());
     return;
   }
 
   // 1.计算残差
   // 旋转残差
-  Eigen::Matrix3d R_nom = q_.toRotationMatrix();
-  Eigen::Matrix3d R_obs = q_obs.toRotationMatrix();
-  Eigen::Matrix3d R_err = R_nom.transpose() * R_obs;
-  Eigen::Vector3d r_theta = Sophus::SO3d(R_err).log();
+  M3d R_nom = q_.toRotationMatrix();
+  M3d R_obs = q_obs.toRotationMatrix();
+  M3d R_err = R_nom.transpose() * R_obs;
+  V3d r_theta = SO3(R_err).log();
 
   // 位置残差
-  Eigen::Vector3d r_p = p_obs - p_;
+  V3d r_p = p_obs - p_;
 
   // 残差向量
   Eigen::Matrix<double, 6, 1> residual;
@@ -99,13 +94,13 @@ void ESKF::observePose(const Eigen::Quaterniond& q_obs, const Eigen::Vector3d& p
 
   // 2.观测矩阵
   Eigen::Matrix<double, 6, 9> H = Eigen::Matrix<double, 6, 9>::Zero();
-  H.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity();  // 旋转
-  H.block<3, 3>(3, 3) = Eigen::Matrix3d::Identity();  // 位置
+  H.block<3, 3>(0, 0) = M3d::Identity();  // 旋转
+  H.block<3, 3>(3, 3) = M3d::Identity();  // 位置
 
   // 3.观测噪声协方差
   Eigen::Matrix<double, 6, 6> R = Eigen::Matrix<double, 6, 6>::Identity();  // 观测噪声协方差
-  R.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity() * ang_meas_std_ * ang_meas_std_;
-  R.block<3, 3>(3, 3) = Eigen::Matrix3d::Identity() * pos_meas_std_ * pos_meas_std_;
+  R.block<3, 3>(0, 0) = M3d::Identity() * ang_meas_std_ * ang_meas_std_;
+  R.block<3, 3>(3, 3) = M3d::Identity() * pos_meas_std_ * pos_meas_std_;
 
   // 4.卡尔曼增益
   Eigen::Matrix<double, 6, 6> S = H * P_ * H.transpose() + R;        // 观测噪声协方差
@@ -126,8 +121,8 @@ void ESKF::observePose(const Eigen::Quaterniond& q_obs, const Eigen::Vector3d& p
 }
 
 void ESKF::injectErrorState() {
-  Eigen::Vector3d dtheta = dx_.head<3>();
-  Eigen::Quaterniond dq = deltaQ(dtheta);
+  V3d dtheta = dx_.head<3>();
+  Qd dq = deltaQ(dtheta);
   q_ = (q_ * dq).normalized();
 
   p_ += dx_.segment<3>(3);

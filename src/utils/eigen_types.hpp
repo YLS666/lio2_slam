@@ -1,7 +1,40 @@
 #pragma once
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
+#include <sophus/se2.hpp>
+#include <sophus/se3.hpp>
 #include <vector>
+
+using V2d = Eigen::Vector2d;
+using V3d = Eigen::Vector3d;
+using V4d = Eigen::Vector4d;
+using M2d = Eigen::Matrix2d;
+using M3d = Eigen::Matrix3d;
+using M4d = Eigen::Matrix4d;
+
+using VXf = Eigen::VectorXf;
+using V2f = Eigen::Vector2f;
+using V3f = Eigen::Vector3f;
+using V4f = Eigen::Vector4f;
+using M2f = Eigen::Matrix2f;
+using M3f = Eigen::Matrix3f;
+using M4f = Eigen::Matrix4f;
+
+using V2i = Eigen::Vector2i;
+using V3i = Eigen::Vector3i;
+using V4i = Eigen::Vector4i;
+using M2i = Eigen::Matrix2i;
+using M3i = Eigen::Matrix3i;
+using M4i = Eigen::Matrix4i;
+
+using Qd = Eigen::Quaterniond;
+
+using SE2 = Sophus::SE2d;
+using SE2f = Sophus::SE2f;
+using SO2 = Sophus::SO2d;
+using SE3 = Sophus::SE3d;
+using SE3f = Sophus::SE3f;
+using SO3 = Sophus::SO3d;
 
 /**
  * @brief 计算向量的反对称矩阵

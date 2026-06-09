@@ -88,6 +88,10 @@ add_executable(run_mapping
  src/frontend/frontend.cpp 
  src/frontend/registration.cpp
  src/frontend/voxel_map.cpp
+ src/estimator/eskf.cpp
+ src/backend/backend.cpp
+ src/loop_closure/loop_closure.cpp
+ src/loop_closure/scan_context.cpp 
  )
 
 target_link_libraries(run_mapping 

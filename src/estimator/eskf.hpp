@@ -1,8 +1,7 @@
 #pragma once
 
-#include <Eigen/Dense>
-#include <Eigen/Geometry>
 #include "frontend/state.hpp"
+#include "utils/eigen_types.hpp"
 
 class ESKF {
  public:
@@ -18,7 +17,7 @@ class ESKF {
   /**
    *@brief: 设置初始名义状态
    */
-  void setState(const Eigen::Quaterniond& q, const Eigen::Vector3d& p, const Eigen::Vector3d& v);
+  void setState(const Qd& q, const V3d& p, const V3d& v);
 
   /**
    *@brief: 设置初始化协方差和噪声
@@ -45,8 +44,7 @@ class ESKF {
    * 协方差传播:
    *   P_{k+1} = F·P_k·Fᵀ + G·Q·Gᵀ
    */
-  void predict(const Eigen::Vector3d& gyr, const Eigen::Vector3d& acc, double dt,
-               const Eigen::Vector3d& gravity = Eigen::Vector3d(0, 0, -9.80665));
+  void predict(const V3d& gyr, const V3d& acc, double dt, const V3d& gravity = V3d(0, 0, -9.80665));
 
   /**
    * @brief 配准观测更新
@@ -60,7 +58,7 @@ class ESKF {
    * 由于配准从零开始(不依赖IMU预测)，观测直接给出绝对位姿。
    * ESKF 的作用是平滑配准结果，结合IMU运动模型进行滤波。
    */
-  void observePose(const Eigen::Quaterniond& q_obs, const Eigen::Vector3d& p_obs);
+  void observePose(const Qd& q_obs, const V3d& p_obs);
 
   /**
    * @brief 获取校正后的名义状态
@@ -76,7 +74,7 @@ class ESKF {
   /**
    * @brief 获取误差状态
    */
-  Eigen::Matrix<double, 9, 9> getErrorState() const { return dx_; }
+  Eigen::Matrix<double, 9, 1> getErrorState() const { return dx_; }
 
   /**
    * @brief 获取协方差矩阵 (用于后端优化, 边缘化等)
@@ -98,14 +96,14 @@ class ESKF {
    * @brief 获取当前时间下IMU预测的位姿
    *        用于去畸变时的姿态插值
    */
-  Eigen::Quaterniond getPredictedQuat() const { return q_; }
-  Eigen::Vector3d getPredictedPos() const { return p_; }
-  Eigen::Vector3d getPredictedVel() const { return v_; }
+  Qd getPredictedQuat() const { return q_; }
+  V3d getPredictedPos() const { return p_; }
+  V3d getPredictedVel() const { return v_; }
 
  private:
-  Eigen::Quaterniond q_;  // 名义姿态
-  Eigen::Vector3d p_;     // 位置
-  Eigen::Vector3d v_;     // 速度
+  Qd q_;   // 名义姿态
+  V3d p_;  // 位置
+  V3d v_;  // 速度
 
   Eigen::Matrix<double, 9, 9> P_;  // 协方差矩阵
 

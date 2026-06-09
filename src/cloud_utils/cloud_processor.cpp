@@ -1,32 +1,27 @@
-#include "cloud_processor.hpp"
+#include "cloud_utils/cloud_processor.hpp"
 #include <pcl/filters/voxel_grid.h>
 #include <rcl/time.h>
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 #include <chrono>
-#include <sophus/se3.hpp>
-#include "cloud_utils/point_type.hpp"
-#include "config_def.hpp"
-#include "utils/eigen_types.hpp"
 
 CloudProcessor::CloudProcessor(AllConfig& config) {
   q_il_ = vecToMat(config.r_imu_lidar).normalized();
-  t_il_ = Eigen::Vector3d(config.t_imu_lidar.data());
+  t_il_ = V3d(config.t_imu_lidar.data());
 }
 
-void CloudProcessor::pre_process(const pcl::PointCloud<FullPointType>::Ptr& cloud,
-                                 pcl::PointCloud<FullPointType>::Ptr& out_cloud) {
+void CloudProcessor::pre_process(const FullCloudPtr& cloud, FullCloudPtr& out_cloud) {
   out_cloud->clear();
   out_cloud->reserve(cloud->size());
 
   double start_time = cloud->points.front().timestamp * 1e-9;
   double end_time = cloud->points.back().timestamp * 1e-9;
-  double dt = (end_time - start_time) / (cloud->size() - 1);
+  double dt = (end_time - start_time) / static_cast<double>(cloud->size() - 1);
 
   for (size_t i = 0; i < cloud->size(); ++i) {
     const auto& pt = cloud->points[i];
     FullPointType new_pt = pt;
-    new_pt.timestamp = static_cast<double>(start_time + i * dt) * 1e9;  // 转换回纳秒
+    new_pt.timestamp = static_cast<double>(start_time + static_cast<int>(i) * dt) * 1e9;  // 转换回纳秒
 
     // 过滤异常点（NAN）
     if (!std::isfinite(new_pt.x) || !std::isfinite(new_pt.y) || !std::isfinite(new_pt.z)) {
@@ -52,8 +47,8 @@ void CloudProcessor::pre_process(const pcl::PointCloud<FullPointType>::Ptr& clou
   return;
 }
 
-pcl::PointCloud<PointType>::Ptr CloudProcessor::process(const MeasureGroup& measures, ImuProcessor* imu_processor) {
-  pcl::PointCloud<PointType>::Ptr output_cloud(new pcl::PointCloud<PointType>());
+CloudPtr CloudProcessor::process(const MeasureGroup& measures, ImuProcessor* imu_processor) {
+  CloudPtr output_cloud(new PointCloudType());
 
   if (!measures.lidar) {
     return output_cloud;
@@ -75,7 +70,7 @@ pcl::PointCloud<PointType>::Ptr CloudProcessor::process(const MeasureGroup& meas
 
   // scan结束时刻状态
   ImuState end_state = imu_processor->interpolate(measures.lidar_end_time);
-  Sophus::SE3d T_end_inv = end_state.T.inverse();
+  SE3 T_end_inv = end_state.T.inverse();
 
   output_cloud->resize(cloud->size());
 
@@ -102,7 +97,7 @@ pcl::PointCloud<PointType>::Ptr CloudProcessor::process(const MeasureGroup& meas
 
   // 生成稀疏pose table
   for (size_t i = 0; i < pose_num; ++i) {
-    double pose_time = scan_begin + i * POSE_DT;
+    double pose_time = scan_begin + static_cast<int>(i) * POSE_DT;
 
     // 防止超scan结束
     if (pose_time > scan_end) {
@@ -124,8 +119,8 @@ pcl::PointCloud<PointType>::Ptr CloudProcessor::process(const MeasureGroup& meas
     double ratio = (pose_time - s1.timestamp) / dt;
 
     // 只做100次slerp！！！
-    Eigen::Quaterniond q = s1.T.unit_quaternion().slerp(ratio, s2.T.unit_quaternion());
-    Eigen::Vector3d p = (1.0 - ratio) * s1.T.translation() + ratio * s2.T.translation();
+    Qd q = s1.T.unit_quaternion().slerp(ratio, s2.T.unit_quaternion());
+    V3d p = (1.0 - ratio) * s1.T.translation() + ratio * s2.T.translation();
 
     pose_table_[i].R = q.toRotationMatrix();
     pose_table_[i].t = p;
@@ -135,10 +130,10 @@ pcl::PointCloud<PointType>::Ptr CloudProcessor::process(const MeasureGroup& meas
   tbb::parallel_for(tbb::blocked_range<size_t>(0, cloud->size(), 1024),
 
                     [&](const tbb::blocked_range<size_t>& range) {
-                      Eigen::Vector3d p_lidar;
-                      Eigen::Vector3d p_imu;
-                      Eigen::Vector3d p_world;
-                      Eigen::Vector3d p_end;
+                      V3d p_lidar;
+                      V3d p_imu;
+                      V3d p_world;
+                      V3d p_end;
 
                       for (size_t i = range.begin(); i < range.end(); ++i) {
                         const auto& pt = cloud->points[i];

@@ -1,35 +1,54 @@
 #include "frontend/frontend.hpp"
-
 #include <pcl/common/transforms.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/io/pcd_io.h>
-#include <chrono>
-#include <iostream>
-#include <mutex>
-#include "frontend/voxel_map.hpp"
 
-Frontend::Frontend() {
-  // 体素大小 0.2m, 区块大小 20m, 保留周围 2 圈区块
+Frontend::Frontend() : last_feature_cloud_(new pcl::PointCloud<PointType>()) {
   map_ = std::make_unique<VoxelMap>(0.2f, 20.0f, 2);
+  reg_ = std::make_unique<Registration>();
+  eskf_ = std::make_unique<ESKF>();
+  backend_ = std::make_unique<Backend>();
+  loop_closure_ = std::make_unique<LoopClosure>();
 }
 
-void Frontend::process(const pcl::PointCloud<PointType>::Ptr& cloud) {
+void Frontend::init(const State& init_state) {
+  state_ = init_state;
+  eskf_->setState(init_state.q, init_state.p, init_state.v);
+  initialized_ = true;
+}
+
+void Frontend::predict(const V3d gyr, const V3d acc, double dt) {
+  if (!initialized_) {
+    return;
+  }
+
+  // ESKF 前向传播
+  eskf_->predict(gyr, acc, dt);
+
+  // 更新状态 (用于 map 的局部中心)
+  state_ = eskf_->getNominalState();
+}
+
+State Frontend::process(const CloudPtr& cloud) {
+  // 初始化
+  if (!initialized_) {
+    // 第一帧初始化地图
+    map_->addCloud(cloud);
+    map_->setLocalCenter(state_.p);
+    initialized_ = true;
+    std::cout << "地图初始化完成, 点数: " << map_->size() << std::endl;
+    return state_;
+  }
+
+  frame_count_++;
+
   // 1. 降体素
-  pcl::PointCloud<PointType>::Ptr ds_cloud(new pcl::PointCloud<PointType>());
+  CloudPtr ds_cloud(new PointCloudType);
   static pcl::VoxelGrid<PointType> voxel;
   voxel.setInputCloud(cloud);
   voxel.setLeafSize(0.1f, 0.1f, 0.1f);
   voxel.filter(*ds_cloud);
   std::cout << "ds_cloud size: " << ds_cloud->size() << std::endl;
-
-  // 初始化
-  if (!initialized_) {
-    map_->addCloud(ds_cloud);
-    map_->setLocalCenter(state_.p);
-    initialized_ = true;
-    std::cout << "frontend init" << std::endl;
-    return;
-  }
 
   // 2. 特征采样
   auto feature_cloud = featureSample(ds_cloud);
@@ -37,43 +56,86 @@ void Frontend::process(const pcl::PointCloud<PointType>::Ptr& cloud) {
 
   // 3. 配准
   auto start = std::chrono::steady_clock::now();
-  registration_.align(feature_cloud, map_.get(), state_);
+
+  State reg_init = state_;  // 用ESKF预测作为初值
+  bool reg_success = reg_->align(feature_cloud, map_.get(), reg_init);
+  if (!reg_success) {
+    std::cout << "配准失败, 维持预测状态" << std::endl;
+    return state_;
+  }
+  // 保存原始观测 (用于下次配准的初值)
+  raw_obs_state_ = reg_init;
+
   auto end = std::chrono::steady_clock::now();
   std::chrono::duration<double> elapsed = end - start;
   std::cout << "registration time: " << elapsed.count() * 1000.0 << " ms" << std::endl;
 
-  // 4. 转换到世界坐标
-  pcl::PointCloud<PointType>::Ptr world_cloud(new pcl::PointCloud<PointType>());
-  Eigen::Matrix4f T = Eigen::Matrix4f::Identity();
-  T.block<3, 3>(0, 0) = state_.q.toRotationMatrix().cast<float>();
-  T.block<3, 1>(0, 3) = state_.p.cast<float>();
-  pcl::transformPointCloud(*feature_cloud, *world_cloud, T);
+  // 4. ESKF观测更新
+  eskf_->observePose(reg_init.q, reg_init.p);
 
-  // 5.只添加新的体素（使用 NearbyType::CENTER 快速检查）
-  pcl::PointCloud<PointType>::Ptr new_cloud(new pcl::PointCloud<PointType>());
-  new_cloud->reserve(world_cloud->size());
-  constexpr float MAP_VOXEL = 0.2f;
+  // 获取校正后的状态
+  state_ = eskf_->getNominalState();
 
-  for (const auto& pt : world_cloud->points) {
-    if (!map_->hasNearbyPoint(pt, MAP_VOXEL, NearbyType::CENTER)) {
-      new_cloud->push_back(pt);
+  // 5. 更新地图
+  {
+    // 转换当前帧到世界系
+    CloudPtr world_cloud(new PointCloudType());
+    M4f T = M4f::Identity();
+    T.block<3, 3>(0, 0) = state_.q.toRotationMatrix().cast<float>();
+    T.block<3, 1>(0, 3) = state_.p.cast<float>();
+    pcl::transformPointCloud(*feature_cloud, *world_cloud, T);
+
+    // 只添加新体素（使用 NearbyType::CENTER 快速检查）
+    CloudPtr new_cloud(new PointCloudType());
+    new_cloud->reserve(world_cloud->size());
+    for (const auto& pt : world_cloud->points) {
+      if (!map_->hasNearbyPoint(pt, 0.2f, NearbyType::CENTER)) {
+        new_cloud->push_back(pt);
+      }
+    }
+
+    map_->addCloud(new_cloud);
+    std::cout << "map add: " << new_cloud->size() << std::endl;
+    std::cout << "map size: " << map_->size() << std::endl;
+
+    // 每隔10帧更新区域
+    if (frame_count_ % 10 == 0) {
+      map_->setLocalCenter(state_.p);
     }
   }
 
-  // 6. 更新地图
-  map_->addCloud(new_cloud);
-  std::cout << "map add: " << new_cloud->size() << std::endl;
-  std::cout << "map size: " << map_->size() << std::endl;
-  std::cout << "pose: " << state_.p.transpose() << std::endl;
-
-  // 7. 每隔10次更新一次地图区块
-  static int frame_count = 0;
-  if (++frame_count % 10 == 0) {
-    map_->setLocalCenter(state_.p);
+  // 6. 后端关键帧管理
+  Eigen::Matrix<double, 6, 6> info_mat = Eigen::Matrix<double, 6, 6>::Identity();
+  Eigen::Matrix<double, 6, 6> cov = reg_->getCovariance();
+  if (cov.norm() > 1e-10) {
+    info_mat = cov.inverse();
   }
+
+  bool is_keyframe = backend_->addKeyFrame(state_, feature_cloud, info_mat);
+
+  if (is_keyframe) {
+    // 滑窗优化
+    backend_->slideWindowOptimize();
+
+    // 更新状态为优化后结果
+    const auto& kfs = backend_->getKeyFrames();
+    if (!kfs.empty()) {
+      const auto& last_kf = kfs.back();
+      state_.p = last_kf.p;
+      state_.q = last_kf.q;
+    }
+
+    // 回环检测
+    tryLoopClosure();
+  }
+
+  // 保存特征云 (用于回环)
+  last_feature_cloud_ = feature_cloud;
+
+  return state_;
 }
 
-pcl::PointCloud<PointType>::Ptr Frontend::featureSample(const pcl::PointCloud<PointType>::Ptr& cloud) {
+CloudPtr Frontend::featureSample(const CloudPtr& cloud) const {
   constexpr float VOXEL_SIZE = 0.4f;
 
   std::unordered_map<VoxelKey, PointType, VoxelHash> voxel_map;
@@ -88,7 +150,7 @@ pcl::PointCloud<PointType>::Ptr Frontend::featureSample(const pcl::PointCloud<Po
     }
   }
 
-  pcl::PointCloud<PointType>::Ptr out(new pcl::PointCloud<PointType>());
+  CloudPtr out(new PointCloudType);
   out->reserve(voxel_map.size());
 
   for (const auto& kv : voxel_map) {
@@ -98,8 +160,41 @@ pcl::PointCloud<PointType>::Ptr Frontend::featureSample(const pcl::PointCloud<Po
   return out;
 }
 
+void Frontend::tryLoopClosure() {
+  const auto& kfs = backend_->getKeyFrames();
+  if (kfs.size() < 30) {
+    return;
+  }
+
+  const auto& current_kf = kfs.back();
+
+  // 添加到回环检测库
+  loop_closure_->addKeyframe(current_kf);
+
+  // 检测回环
+  if (frame_count_ % loop_closure_interval_ == 0) {
+    std::vector<LoopPair> loop_pairs;
+    if (loop_closure_->detect(current_kf, loop_pairs)) {
+      std::cout << "检测到 " << loop_pairs.size() << " 个回环!" << std::endl;
+      backend_->globalOptimize(loop_pairs);
+
+      const auto& updated_kfs = backend_->getKeyFrames();
+      if (!updated_kfs.empty()) {
+        state_.p = updated_kfs.back().p;
+        state_.q = updated_kfs.back().q;
+        // 更新 ESKF 状态
+        eskf_->setState(state_.q, state_.p, state_.v);
+      }
+    }
+  }
+}
+
 void Frontend::saveMap(const std::string& filename) const {
   auto cloud = map_->getCloud();
+  if (cloud->empty()) {
+    std::cout << "地图为空，无法保存" << std::endl;
+    return;
+  }
   pcl::io::savePCDFileBinary(filename, *cloud);
   std::cout << "地图保存完成：" << filename << ",  点数：" << cloud->size() << std::endl;
 }

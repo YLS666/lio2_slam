@@ -3,12 +3,8 @@
 #include <tbb/concurrent_unordered_map.h>
 #include <tbb/tbb.h>
 
-#include <Eigen/Core>
-
-#include <pcl/point_cloud.h>
-#include <pcl/point_types.h>
-
-using PointType = pcl::PointXYZI;
+#include "cloud_utils/point_type.hpp"
+#include "utils/eigen_types.hpp"
 
 struct VoxelKey {
   int x;
@@ -65,17 +61,17 @@ class VoxelMap {
 
   size_t size() const;
 
-  void addCloud(const pcl::PointCloud<PointType>::Ptr& cloud);
+  void addCloud(const CloudPtr& cloud);
 
   bool nearestSearch(const PointType& pt, PointType& nearest_pt, float& nearest_dist,
                      NearbyType nearby = NearbyType::NEARBY6) const;
 
   bool hasNearbyPoint(const PointType& pt, float radius, NearbyType nearby = NearbyType::NEARBY6) const;
 
-  pcl::PointCloud<PointType>::Ptr getCloud() const;
+  CloudPtr getCloud() const;
 
   // 设置新的局部中心点，触发区块加载/卸载
-  void setLocalCenter(const Eigen::Vector3d& center);
+  void setLocalCenter(const V3d& center);
 
  private:
   VoxelKey pointToVoxel(const PointType& pt) const;

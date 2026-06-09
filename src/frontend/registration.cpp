@@ -1,30 +1,33 @@
 #include "frontend/registration.hpp"
-#include <Eigen/src/Geometry/Quaternion.h>
 #include <tbb/tbb.h>
+#include <cstddef>
 #include <iostream>
-#include "utils/eigen_types.hpp"
+#include "cloud_utils/point_type.hpp"
 
-Registration::Registration() {}
+Registration::Registration() { covariance_.setZero(); }
 
-Eigen::Matrix3d Registration::skew(const Eigen::Vector3d& v) {
-  Eigen::Matrix3d m;
+M3d Registration::skew(const V3d& v) {
+  M3d m;
   m << 0.0, -v.z(), v.y(), v.z(), 0.0, -v.x(), -v.y(), v.x(), 0.0;
 
   return m;
 }
 
-bool Registration::align(const pcl::PointCloud<PointType>::Ptr& cloud, VoxelMap* map, State& state) {
+bool Registration::align(const CloudPtr& cloud, VoxelMap* map, State& state) {
   if (map->size() < 100) {
     return false;
   }
 
   constexpr int MAX_ITER = 3;
-  constexpr float MAX_DIST = 1.0f;
+  constexpr float MAX_DIST = 0.5f;  // 最大匹配距离
+
+  inlier_count_ = 0;
+  match_count_ = 0;
 
   // 预计算旋转矩阵
   for (int iter = 0; iter < MAX_ITER; ++iter) {
-    const Eigen::Matrix3d R = state.q.toRotationMatrix();
-    const Eigen::Vector3d t = state.p;
+    const M3d R = state.q.toRotationMatrix();
+    const V3d t = state.p;
 
     // 使用固定尺寸矩阵
     struct Reduction {
@@ -32,6 +35,9 @@ bool Registration::align(const pcl::PointCloud<PointType>::Ptr& cloud, VoxelMap*
       Eigen::Matrix<double, 6, 1> b = Eigen::Matrix<double, 6, 1>::Zero();
       double error = 0.0;
       int count = 0;
+
+      // 用于协方差计算的原始 Hessian (不加权)
+      Eigen::Matrix<double, 6, 6> H_raw = Eigen::Matrix<double, 6, 6>::Zero();
     };
 
     Reduction result = tbb::parallel_reduce(
@@ -40,28 +46,27 @@ bool Registration::align(const pcl::PointCloud<PointType>::Ptr& cloud, VoxelMap*
           // 将 Jacobian矩阵放在循环外，防止反复构造
           // J = [I, -R * skew(p)] 是 3x6 矩阵
           Eigen::Matrix<double, 3, 6> J;
-          Eigen::Matrix3d skew_p;
-          Eigen::Matrix<double, 3, 3> R_skew;  // 存 R * skew(p) 结果
+          M3d skew_p;
+          V3d p_lidar;
+          V3d pw;
+          V3d residual_vec;
+          PointType nearest_pt;
+          PointType search_pt;
+          float dist;
 
           for (size_t i = range.begin(); i < range.end(); ++i) {
             const auto& pt = cloud->points[i];
 
-            const double px = pt.x;
-            const double py = pt.y;
-            const double pz = pt.z;
+            // 1. 计算世界坐标系下的点
+            p_lidar << pt.x, pt.y, pt.z;
 
-            // 不使用Eigen::Vector3d pw = R * p + t， 减少模板开销
-            const double pw_x = R(0, 0) * px + R(0, 1) * py + R(0, 2) * pz + t.x();
-            const double pw_y = R(1, 0) * px + R(1, 1) * py + R(1, 2) * pz + t.y();
-            const double pw_z = R(2, 0) * px + R(2, 1) * py + R(2, 2) * pz + t.z();
+            // 2. 转到世界坐标系
+            pw = R * p_lidar + t;
 
-            PointType search_pt;
-            search_pt.x = pw_x;
-            search_pt.y = pw_y;
-            search_pt.z = pw_z;
-
-            PointType nearest_pt;
-            float dist;
+            // 3. 搜索最近点
+            search_pt.x = static_cast<float>(pw.x());
+            search_pt.y = static_cast<float>(pw.y());
+            search_pt.z = static_cast<float>(pw.z());
 
             if (!map->nearestSearch(search_pt, nearest_pt, dist)) {
               continue;
@@ -71,20 +76,40 @@ bool Registration::align(const pcl::PointCloud<PointType>::Ptr& cloud, VoxelMap*
               continue;
             }
 
-            // 残差 = pw - q
-            Eigen::Vector3d residual(pw_x - nearest_pt.x, pw_y - nearest_pt.y, pw_z - nearest_pt.z);
+            // 4. 残差向量
+            residual_vec = pw - V3d(nearest_pt.x, nearest_pt.y, nearest_pt.z);
 
-            local.error += residual.squaredNorm();
+            // 5. Huber鲁棒核
+            // 原理: 对每个匹配点计算残差范数 |r| ,如果 |r| > k (默认 0.3m), 权重 < 1.0
+            // 作用: 坑洼地面/动态物体会产生大残差 → 权重降低,不会污染优化结果
+            double residual_norm = residual_vec.norm();
+            double weight = 1.0;
 
-            // 构造 J = [I, -R * skew(p)]
-            Eigen::Vector3d p(pt.x, pt.y, pt.z);
-            J.block<3, 3>(0, 0).setIdentity();
-            J.block<3, 3>(0, 3).noalias() = -R * skew(p);
+            if (use_huber_) {
+              weight = huberWeight(residual_norm, huber_k_);
+              if (weight < 0.01) {
+                continue;
+              }
+            }
 
-            // 固定尺寸矩阵的 J^T*J 和 J^T*r 已经很快
-            local.H.noalias() += J.transpose() * J;
-            local.b.noalias() += -J.transpose() * residual;
+            // 6. 统计
             local.count++;
+            local.error += weight * residual_vec.squaredNorm();
+
+            // 7. 构造 J = [I, -R * skew(p_lidar)]
+            J.block<3, 3>(0, 0).setIdentity();
+            J.block<3, 3>(0, 3) = -R * skew(p_lidar);
+
+            // 8. Huber加权
+            double sqrt_w = std::sqrt(weight);
+            Eigen::Matrix<double, 3, 6> J_w = J * sqrt_w;
+            V3d r_w = residual_vec * sqrt_w;
+
+            local.H.noalias() += J_w.transpose() * J_w;
+            local.b.noalias() += -J_w.transpose() * r_w;
+
+            // 9. 不加权
+            local.H_raw.noalias() += J.transpose() * J;
           }
 
           return local;
@@ -97,12 +122,16 @@ bool Registration::align(const pcl::PointCloud<PointType>::Ptr& cloud, VoxelMap*
           out.b = a.b + b.b;
           out.error = a.error + b.error;
           out.count = a.count + b.count;
+          out.H_raw = a.H_raw + b.H_raw;
           return out;
         });
 
     if (result.count < 50) {
+      std::cout << "配准失败：匹配点数不足（" << result.count << ")" << std::endl;
       return false;
     }
+
+    match_count_ = result.count;
 
     // 求解 H * dx = b ， LDLT分解
     Eigen::Matrix<double, 6, 1> dx = result.H.ldlt().solve(result.b);
@@ -111,26 +140,59 @@ bool Registration::align(const pcl::PointCloud<PointType>::Ptr& cloud, VoxelMap*
     state.p += dx.head<3>();
 
     // 旋转更新（SO3 指数映射）
-    Eigen::Vector3d dtheta = dx.tail<3>();
+    V3d dtheta = dx.tail<3>();
     double dthata_norm = dtheta.norm();
 
     // 使用 SO3指数映射更新旋转，比四元数近似更精确
     if (dthata_norm > 1e-10) {
-      Eigen::Vector3d axis = dtheta / dthata_norm;
-      double half_angle = 0.5 * dtheta.norm();
-      Eigen::Quaterniond dq(std::cos(half_angle), axis.x() * std::sin(half_angle), axis.y() * std::sin(half_angle),
-                            axis.z() * std::sin(half_angle));
-      state.q = dq * state.q;
+      Qd dq = deltaQ(dtheta);
+      state.q = (dq * state.q).normalized();
     } else {
-      Eigen::Quaterniond dq(1.0, 0.5 * dtheta.x(), 0.5 * dtheta.y(), 0.5 * dtheta.z());
-      dq.normalize();
-
-      state.q = dq * state.q;
+      Qd dq(1.0, 0.5 * dtheta.x(), 0.5 * dtheta.y(), 0.5 * dtheta.z());
+      state.q = (dq * state.q).normalized();
     }
 
     state.q.normalize();
 
-    std::cout << "iter = " << iter << " error = " << result.error / result.count << std::endl;
+    if (iter == MAX_ITER - 1) {
+      inlier_count_ = 0;
+      {
+        const M3d R_final = state.q.toRotationMatrix();
+        const V3d t_final = state.p;
+
+        for (size_t i = 0; i < cloud->size(); ++i) {
+          const auto& pt = cloud->points[i];
+          const V3d p_lidar(pt.x, pt.y, pt.z);
+          const V3d pw_final = R_final * p_lidar + t_final;
+
+          PointType sp;
+          sp.x = static_cast<float>(pw_final.x());
+          sp.y = static_cast<float>(pw_final.y());
+          sp.z = static_cast<float>(pw_final.z());
+
+          PointType np;
+          float d;
+
+          if (!map->nearestSearch(sp, np, d)) {
+            continue;
+          }
+          if (d > MAX_DIST) {
+            continue;
+          }
+          V3d res = pw_final - V3d(np.x, np.y, np.z);
+          double w = use_huber_ ? huberWeight(res.norm(), huber_k_) : 1.0;
+          if (w > 0.5) {
+            inlier_count_++;  // 计算内点数
+          }
+
+          double sigma2 = result.error / std::max(1, result.count - 6);  // 6个状态变量
+          covariance_ = sigma2 * result.H_raw.inverse();                 // 计算协方差矩阵
+        }
+      }
+    }
+
+    std::cout << "iter = " << iter << " error = " << result.error / result.count << "count = " << result.count
+              << "inlier = " << inlier_count_ << (use_huber_ ? " Huber " : "") << std::endl;
 
     if (dx.norm() < 1e-4) {
       break;

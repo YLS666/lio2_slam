@@ -1,6 +1,5 @@
 #include "sync/time_sync.hpp"
-
-#include <iostream>
+#include "cloud_utils/point_type.hpp"
 
 TimeSync::TimeSync(ImuProcessor* imu_processor) : imu_processor_(imu_processor) {}
 
@@ -12,7 +11,7 @@ void TimeSync::pushImu(const sensor_msgs::msg::Imu& imu) {
   }
 }
 
-void TimeSync::pushCloud(pcl::PointCloud<FullPointType>::Ptr cloud) {
+void TimeSync::pushCloud(FullCloudPtr cloud) {
   cloud_buffer_.push_back(cloud);
 
   if (cloud_buffer_.size() > 100) {

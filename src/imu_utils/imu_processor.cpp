@@ -1,14 +1,10 @@
 #include "imu_processor.hpp"
 
-#include <algorithm>
-#include <iomanip>
 #include <iostream>
-#include "config_def.hpp"
-#include "utils/eigen_types.hpp"
 
 ImuProcessor::ImuProcessor(AllConfig& config) {
   g_norm_ = config.g_norm;  // 9.80665 m/s²
-  gravity_ = Eigen::Vector3d(0, 0, -g_norm_);
+  gravity_ = V3d(0, 0, -g_norm_);
   bg_.setZero();
   ba_.setZero();
 }
@@ -17,12 +13,12 @@ bool ImuProcessor::isInitialized() const { return initialized_; }
 
 const std::deque<ImuState>& ImuProcessor::getStates() const { return states_; }
 
-void ImuProcessor::updateBias(const Eigen::Vector3d& bg, const Eigen::Vector3d& ba) {
+void ImuProcessor::updateBias(const V3d& bg, const V3d& ba) {
   bg_ = bg;
   ba_ = ba;
 }
 
-void ImuProcessor::initializeImu(double t, const Eigen::Vector3d& gyr, const Eigen::Vector3d& acc) {
+void ImuProcessor::initializeImu(double t, const V3d& gyr, const V3d& acc) {
   init_gyrs_.push_back(gyr);
   init_accs_.push_back(acc);
 
@@ -33,8 +29,8 @@ void ImuProcessor::initializeImu(double t, const Eigen::Vector3d& gyr, const Eig
   }
 
   // 1. 计算均值
-  Eigen::Vector3d mean_gyr = Eigen::Vector3d::Zero();
-  Eigen::Vector3d mean_acc = Eigen::Vector3d::Zero();
+  V3d mean_gyr = V3d::Zero();
+  V3d mean_acc = V3d::Zero();
 
   for (const auto& g : init_gyrs_) {
     mean_gyr += g;
@@ -42,22 +38,22 @@ void ImuProcessor::initializeImu(double t, const Eigen::Vector3d& gyr, const Eig
   for (const auto& a : init_accs_) {
     mean_acc += a;
   }
-  mean_gyr /= init_gyrs_.size();
-  mean_acc /= init_accs_.size();
+  mean_gyr /= static_cast<double>(init_gyrs_.size());
+  mean_acc /= static_cast<double>(init_accs_.size());
 
   // 2. 计算协方差
-  Eigen::Vector3d cov_gyr = Eigen::Vector3d::Zero();
-  Eigen::Vector3d cov_acc = Eigen::Vector3d::Zero();
+  V3d cov_gyr = V3d::Zero();
+  V3d cov_acc = V3d::Zero();
 
   for (size_t i = 0; i < init_gyrs_.size(); ++i) {
-    Eigen::Vector3d dg = init_gyrs_[i] - mean_gyr;
-    Eigen::Vector3d da = init_accs_[i] - mean_acc;
+    V3d dg = init_gyrs_[i] - mean_gyr;
+    V3d da = init_accs_[i] - mean_acc;
 
     cov_gyr += dg.cwiseProduct(dg);
     cov_acc += da.cwiseProduct(da);
   }
-  cov_gyr /= init_gyrs_.size();
-  cov_acc /= init_accs_.size();
+  cov_gyr /= static_cast<double>(init_gyrs_.size());
+  cov_acc /= static_cast<double>(init_accs_.size());
 
   std::cout << "cov_gyr = " << cov_gyr.transpose() << " (norm=" << cov_gyr.norm() << ")" << std::endl;
   std::cout << "cov_acc = " << cov_acc.transpose() << " (norm=" << cov_acc.norm() << ")" << std::endl;
@@ -79,11 +75,11 @@ void ImuProcessor::initializeImu(double t, const Eigen::Vector3d& gyr, const Eig
       // 重力：使用 mean_acc 方向，长度归一化为 9.80665
       gravity_dir_ = -mean_acc.normalized();
       acc_scale_ = g_norm_ / mean_acc.norm();
-      Eigen::Quaterniond q0 = Eigen::Quaterniond::FromTwoVectors(gravity_dir_, Eigen::Vector3d(0, 0, -1));
+      Qd q0 = Qd::FromTwoVectors(gravity_dir_, V3d(0, 0, -1));
 
       ImuState init_state;
       init_state.timestamp = t;
-      init_state.T = Sophus::SE3d(q0, Eigen::Vector3d::Zero());
+      init_state.T = SE3(q0, V3d::Zero());
       init_state.v.setZero();
       init_state.bg = bg_;
       init_state.ba = ba_;
@@ -115,12 +111,12 @@ void ImuProcessor::initializeImu(double t, const Eigen::Vector3d& gyr, const Eig
   acc_scale_ = g_norm_ / mean_acc.norm();  // 缩放系数
 
   // 使用精确的重力方向计算初始姿态
-  Eigen::Quaterniond q0 = Eigen::Quaterniond::FromTwoVectors(gravity_dir_, Eigen::Vector3d(0, 0, -1));
+  Qd q0 = Qd::FromTwoVectors(gravity_dir_, V3d(0, 0, -1));
 
   // 6. 创建初始状态
   ImuState init_state;
   init_state.timestamp = t;
-  init_state.T = Sophus::SE3d(q0, Eigen::Vector3d::Zero());
+  init_state.T = SE3(q0, V3d::Zero());
   init_state.v.setZero();
   init_state.bg = bg_;
   init_state.ba = ba_;
@@ -147,8 +143,8 @@ void ImuProcessor::initializeImu(double t, const Eigen::Vector3d& gyr, const Eig
 bool ImuProcessor::processImu(const sensor_msgs::msg::Imu& imu) {
   double t = imu.header.stamp.sec + imu.header.stamp.nanosec * 1e-9;  // 1778046511.092436
 
-  Eigen::Vector3d gyr(imu.angular_velocity.x, imu.angular_velocity.y, imu.angular_velocity.z);
-  Eigen::Vector3d acc(imu.linear_acceleration.x, imu.linear_acceleration.y, imu.linear_acceleration.z);
+  V3d gyr(imu.angular_velocity.x, imu.angular_velocity.y, imu.angular_velocity.z);
+  V3d acc(imu.linear_acceleration.x, imu.linear_acceleration.y, imu.linear_acceleration.z);
 
   // g -> m/s²
   acc *= g_norm_;
@@ -174,19 +170,19 @@ bool ImuProcessor::processImu(const sensor_msgs::msg::Imu& imu) {
   acc -= ba_;
 
   // SO3更新
-  Eigen::Vector3d omega = gyr * dt;       // 计算当前帧imu数据的角速度
-  Eigen::Quaterniond dq = deltaQ(omega);  // 计算当前帧imu数据的旋转矩阵
+  V3d omega = gyr * dt;   // 计算当前帧imu数据的角速度
+  Qd dq = deltaQ(omega);  // 计算当前帧imu数据的旋转矩阵
 
   ImuState state;
   state.timestamp = t;
   // 姿态更新：当前帧的姿态 = 上一帧的姿态 * 当前帧的增量旋转
-  Eigen::Quaterniond q = last.T.unit_quaternion() * dq;
+  Qd q = last.T.unit_quaternion() * dq;
   q.normalize();
   // 加速度更新：当前帧的加速度 = 当前帧的旋转矩阵 * 当前帧的加速度 + 重力(一般为-g)
-  Eigen::Vector3d acc_world = q * acc + gravity_;
+  V3d acc_world = q * acc + gravity_;
   // 位姿更新：当前帧的位姿 = 上一帧的位姿 + 上一帧的线速度 * 时间差 + 0.5 * 加速度 * 时间差平方
-  Eigen::Vector3d p = last.T.translation() + last.v * dt + 0.5 * acc_world * dt * dt;
-  state.T = Sophus::SE3d(q, p);
+  V3d p = last.T.translation() + last.v * dt + 0.5 * acc_world * dt * dt;
+  state.T = SE3(q, p);
   // 速度更新：当前帧的速度 = 上一帧的速度 + 当前帧的加速度 * 时间差
   state.v = last.v + acc_world * dt;
   // 保存偏置
@@ -260,10 +256,10 @@ ImuState ImuProcessor::interpolate(double t) const {
 
   state.timestamp = t;
 
-  Eigen::Quaterniond q = s1.T.unit_quaternion().slerp(ratio, s2.T.unit_quaternion());
-  Eigen::Vector3d p = (1.0 - ratio) * s1.T.translation() + ratio * s2.T.translation();
+  Qd q = s1.T.unit_quaternion().slerp(ratio, s2.T.unit_quaternion());
+  V3d p = (1.0 - ratio) * s1.T.translation() + ratio * s2.T.translation();
 
-  state.T = Sophus::SE3d(q, p);
+  state.T = SE3(q, p);
   state.v = (1.0 - ratio) * s1.v + ratio * s2.v;
   state.bg = (1.0 - ratio) * s1.bg + ratio * s2.bg;
   state.ba = (1.0 - ratio) * s1.ba + ratio * s2.ba;

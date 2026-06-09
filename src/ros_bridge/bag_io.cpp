@@ -1,10 +1,9 @@
 #include "bag_io.hpp"
 #include <pcl_conversions/pcl_conversions.h>
-#include <iostream>
+#include "cloud_utils/point_type.hpp"
 #include "rclcpp/serialization.hpp"
 #include "rclcpp/serialized_message.hpp"
 #include "rosbag2_cpp/reader.hpp"
-#include "sensor_msgs/msg/point_cloud2.hpp"
 
 BagIO::BagIO(AllConfig& config) {
   bag_path_ = config.bag_file;
@@ -14,7 +13,7 @@ BagIO::BagIO(AllConfig& config) {
 
 void BagIO::run(std::function<void(const sensor_msgs::msg::Imu&)> imu_callback,
 
-                std::function<void(const pcl::PointCloud<FullPointType>::Ptr&)> cloud_callback) {
+                std::function<void(const FullCloudPtr&)> cloud_callback) {
   rosbag2_cpp::Reader reader;
 
   reader.open(bag_path_);
@@ -43,7 +42,7 @@ void BagIO::run(std::function<void(const sensor_msgs::msg::Imu&)> imu_callback,
 
       serializer.deserialize_message(&serialized_msg, &cloud_msg);
 
-      pcl::PointCloud<FullPointType>::Ptr cloud(new pcl::PointCloud<FullPointType>());
+      FullCloudPtr cloud(new FullCloudPointType());
 
       pcl::fromROSMsg(cloud_msg, *cloud);
 
