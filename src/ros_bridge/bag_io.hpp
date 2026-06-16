@@ -4,6 +4,7 @@
 #include "cloud_utils/point_type.hpp"
 #include "config_def.hpp"
 #include "sensor_msgs/msg/imu.hpp"
+#include "sensor_msgs/msg/point_cloud2.hpp"
 
 class BagIO {
  public:
@@ -11,7 +12,7 @@ class BagIO {
 
   void run(std::function<void(const sensor_msgs::msg::Imu&)> imu_callback,
 
-           std::function<void(const FullCloudPtr&)> cloud_callback);
+           std::function<void(const sensor_msgs::msg::PointCloud2::SharedPtr&)> cloud_callback);
 
  private:
   std::string bag_path_;

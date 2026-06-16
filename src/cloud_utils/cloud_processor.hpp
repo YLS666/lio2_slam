@@ -5,6 +5,7 @@
 #include "config_def.hpp"
 #include "imu_utils/imu_processor.hpp"
 #include "measure/measure_group.hpp"
+#include "sensor_msgs/msg/point_cloud2.hpp"
 #include "utils/eigen_types.hpp"
 
 struct PoseCache {
@@ -18,7 +19,7 @@ class CloudProcessor {
 
   CloudPtr process(const MeasureGroup& measures, ImuProcessor* imu_processor);
 
-  void pre_process(const FullCloudPtr& cloud, FullCloudPtr& out_cloud);
+  void pre_process(const sensor_msgs::msg::PointCloud2::SharedPtr& cloud, FullCloudPtr& out_cloud);
 
  private:
   Qd q_il_ = Qd::Identity();

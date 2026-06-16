@@ -44,7 +44,7 @@ class ESKF {
    * 协方差传播:
    *   P_{k+1} = F·P_k·Fᵀ + G·Q·Gᵀ
    */
-  void predict(const V3d& gyr, const V3d& acc, double dt, const V3d& gravity = V3d(0, 0, -9.80665));
+  void predict(const V3d& gyr, const V3d& acc, double dt, double g_norm = 9.80665);
 
   /**
    * @brief 配准观测更新

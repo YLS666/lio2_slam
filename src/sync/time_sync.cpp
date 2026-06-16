@@ -31,14 +31,14 @@ bool TimeSync::syncMeasure(MeasureGroup& measures) {
     return false;
   }
 
-  double lidar_begin_time = cloud->points.front().timestamp * 1e-9;
-  double lidar_end_time = cloud->points.back().timestamp * 1e-9;
+  double lidar_begin_time = cloud->header.stamp * 1e-9 + cloud->points.front().timestamp;  // s
+  double lidar_end_time = cloud->header.stamp * 1e-9 + cloud->points.back().timestamp;
 
   if (imu_buffer_.empty()) {
     return false;
   }
 
-  double imu_begin_time = imu_buffer_.front().header.stamp.sec + imu_buffer_.front().header.stamp.nanosec * 1e-9;
+  double imu_begin_time = imu_buffer_.front().header.stamp.sec + imu_buffer_.front().header.stamp.nanosec * 1e-9;  // s
   double imu_last_time = imu_buffer_.back().header.stamp.sec + imu_buffer_.back().header.stamp.nanosec * 1e-9;
 
   // 情况1：lidar太旧
@@ -96,12 +96,11 @@ bool TimeSync::syncMeasure(MeasureGroup& measures) {
   std::cout << "lidar begin : " << lidar_begin_time << std::endl;
   std::cout << "lidar end : " << lidar_end_time << std::endl;
 
+  // 删除所有时间戳 < lidar_end_time + 0.01 的IMU (已消费的帧)
   while (!imu_buffer_.empty()) {
     double imu_time = imu_buffer_.front().header.stamp.sec + imu_buffer_.front().header.stamp.nanosec * 1e-9;
 
-    // 只删除：
-    // 比当前最老lidar还旧很多的imu
-    if (imu_time < lidar_begin_time - 1.0) {
+    if (imu_time < lidar_end_time + 0.01) {
       imu_buffer_.pop_front();
     } else {
       break;

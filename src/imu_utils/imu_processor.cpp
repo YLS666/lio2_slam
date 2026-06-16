@@ -189,18 +189,6 @@ bool ImuProcessor::processImu(const sensor_msgs::msg::Imu& imu) {
   state.bg = bg_;
   state.ba = ba_;
 
-  // std::cout << "=========== IMU PROCESS ==========" << std::endl;
-  // std::cout << std::fixed << std::setprecision(6);
-  // std::cout << "timestamp : " << state.timestamp << std::endl;
-  // std::cout << "acc : " << acc.transpose() << std::endl;
-  // std::cout << "acc_world : " << acc_world.transpose() << std::endl;
-  // std::cout << "gravity : " << gravity_.transpose() << std::endl;
-  // std::cout << "quaternion : " << state.T.unit_quaternion().coeffs().transpose() << std::endl;
-  // std::cout << "position : " << state.T.translation().transpose() << std::endl;
-  // std::cout << "velocity : " << state.v.transpose() << std::endl;
-  // std::cout << "bg = " << bg_.transpose() << std::endl;
-  // std::cout << "ba = " << ba_.transpose() << std::endl << std::endl;
-
   states_.push_back(state);
 
   // 数据清理

@@ -4,8 +4,6 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
-#include <valarray>
-#include <vector>
 #include "backend/backend.hpp"
 #include "backend/keyframe.hpp"
 #include "cloud_utils/point_type.hpp"
@@ -67,14 +65,27 @@ bool LoopClosure::detect(const KeyFrame& current_kf, std::vector<LoopPair>& loop
 
     int candidate_id = scores[c].second;
 
+    const KeyFrame* candidate_kf = nullptr;
+    if (keyframes_ptr_) {
+      for (const auto& kf : *keyframes_ptr_) {
+        if (kf.id == candidate_id) {
+          candidate_kf = &kf;
+          break;
+        }
+      }
+    }
+
+    // 没找到候选帧，跳过
+    if (!candidate_kf) {
+      std::cout << "回环检测: 未找到候选关键帧 id=" << candidate_id << std::endl;
+      continue;
+    }
+
     // 获取候选关键帧
-    // 几何验证 (简化: 直接假设验证通过)
-    // @ TODO: ICP配准点云
     V3d rel_p;
     Qd rel_q;
 
-    // 这里简化几何验证
-    bool verified = true;
+    bool verified = geometricVerification(*candidate_kf, current_kf, rel_p, rel_q);
 
     if (verified) {
       LoopPair pair;

@@ -42,8 +42,7 @@ BlockKey VoxelMap::voxelToBlock(const VoxelKey& vkey) const {
 void VoxelMap::addCloud(const CloudPtr& cloud) {
   for (const auto& pt : cloud->points) {
     VoxelKey key = pointToVoxel(pt);
-    // insert 如果已存在则不覆盖（保持第一个点）
-    voxel_map_.insert({key, pt});
+    voxel_map_[key] = pt;
   }
 }
 

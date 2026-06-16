@@ -1,11 +1,16 @@
 #include "backend/backend.hpp"
+#include <Eigen/src/Core/Matrix.h>
+#include <Eigen/src/Geometry/Transform.h>
+#include <g2o/core/robust_kernel.h>
+#include <g2o/core/sparse_optimizer.h>
+#include <g2o/types/slam3d/vertex_se3.h>
 #include <cmath>
 #include <iostream>
-#include <vector>
 #include "backend/keyframe.hpp"
 #include "cloud_utils/point_type.hpp"
 #include "frontend/state.hpp"
 #include "utils/eigen_types.hpp"
+#include "utils/g2o_types.hpp"
 
 Backend::Backend() {}
 
@@ -14,19 +19,21 @@ bool Backend::addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen
   if (keyframes_.empty()) {
     KeyFrame kf;
     kf.id = 0;
-    kf.timestamp = static_cast<int>(keyframes_.size());
+    kf.timestamp = state.timestamp;
     kf.p = state.p;
     kf.q = state.q;
     kf.cloud = cloud;
     kf.info_mat = info_mat;
+    kf.relative_p.setZero();
+    kf.relative_q.setIdentity();
     keyframes_.push_back(kf);
-    last_keyframe_timestamp_ = 0.0;
+    last_keyframe_timestamp_ = state.timestamp;
     return true;
   }
 
   // 检查是否满足关键帧条件
   const auto& last = keyframes_.back();
-  double time_diff = static_cast<int>(keyframes_.size()) - last.timestamp;  // 简化时间
+  double time_diff = state.timestamp - last.timestamp;  // 简化时间
 
   // 计算与上一关键帧的相对变换
   M3d R_last = last.q.toRotationMatrix();
@@ -58,7 +65,7 @@ bool Backend::addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen
   // 创建新关键帧
   KeyFrame kf;
   kf.id = static_cast<int>(keyframes_.size());
-  kf.timestamp = static_cast<int>(keyframes_.size());
+  kf.timestamp = state.timestamp;
   kf.p = state.p;
   kf.q = state.q;
   kf.cloud = cloud;
@@ -69,12 +76,16 @@ bool Backend::addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen
   kf.relative_p = R_last.transpose() * (state.p - last.p);
 
   keyframes_.push_back(kf);
-  last_keyframe_timestamp_ = static_cast<int>(keyframes_.size());
+  last_keyframe_timestamp_ = kf.timestamp;
 
-  // 限制滑动窗口大小
-  while (static_cast<int>(keyframes_.size()) > (window_size_ + 5)) {
-    // 保留第一个固定帧, 移除最老的
+  // 保留所有关键帧用于回环, 仅限制最大数量
+  static constexpr int MAX_TOTAL_KFS = 200;
+  if (static_cast<int>(keyframes_.size()) > MAX_TOTAL_KFS) {
     keyframes_.pop_front();
+    // 重新编号
+    for (size_t i = 0; i < keyframes_.size(); ++i) {
+      keyframes_[i].id = static_cast<int>(i);
+    }
   }
 
   return true;
@@ -93,87 +104,71 @@ void Backend::slideWindowOptimize() {
     return;
   }
 
-  std::vector<V3d> positions(N);
-  std::vector<Qd> rotations(N);
-  std::vector<int> fixed_ids;
+  std::unique_ptr<LinearSolver> linearSolver = std::make_unique<LinearSolver>();
+  linearSolver->setBlockOrdering(false);
+  std::unique_ptr<BlockSolver> blockSolver = std::make_unique<BlockSolver>(std::move(linearSolver));
+  auto* algorithm = new g2o::OptimizationAlgorithmLevenberg(std::move(blockSolver));
 
-  // 第1帧固定 (提供参考系)
-  fixed_ids.push_back(0);
+  g2o::SparseOptimizer optimizer;
+  optimizer.setAlgorithm(algorithm);
+  optimizer.setVerbose(false);
+
+  // 添加顶点
+  std::vector<g2o::VertexSE3*> vertices(N);
 
   for (int i = 0; i < N; ++i) {
-    positions[i] = keyframes_[start_idx + i].p;
-    rotations[i] = keyframes_[start_idx + i].q;
+    auto* v = new g2o::VertexSE3();
+    v->setId(i);
+
+    Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
+    T.rotate(keyframes_[start_idx + i].q.toRotationMatrix());
+    T.pretranslate(keyframes_[start_idx + i].p);
+    v->setEstimate(T);
+
+    if (i == 0) {
+      v->setFixed(true);
+    }
+    optimizer.addVertex(v);
+    vertices[i] = v;
   }
 
-  // 执行高斯牛顿优化
-  gaussNewtonPoseGraph(positions, rotations, fixed_ids);
+  // 添加帧间约束边（i->i+1)
+  for (int i = 0; i < N - 1; ++i) {
+    const auto& kf = keyframes_[start_idx + i];
+    auto* edge = new g2o::EdgeSE3();
+    edge->setVertex(0, vertices[i]);
+    edge->setVertex(1, vertices[i + 1]);
 
-  // 写入回关键帧
+    Eigen::Isometry3d T_rel = Eigen::Isometry3d::Identity();
+    T_rel.rotate(kf.relative_q.toRotationMatrix());
+    T_rel.pretranslate(kf.relative_p);
+    edge->setMeasurement(T_rel);
+
+    Eigen::Matrix<double, 6, 6> info = kf.info_mat;
+    double det = info.determinant();
+    if (det < 1e-12 || det > 1e18 || std::isnan(det) || std::isinf(det)) {
+      std::cout << "关键帧 " << kf.id << " 信息矩阵异常(det=" << det << "), 使用单位矩阵" << std::endl;
+      info = Eigen::Matrix<double, 6, 6>::Identity();
+    }
+    edge->setInformation(info);
+    auto* rk = new g2o::RobustKernelHuber();
+    rk->setDelta(0.1);
+    edge->setRobustKernel(rk);
+    optimizer.addEdge(edge);
+  }
+
+  // 优化
+  optimizer.initializeOptimization();
+  optimizer.optimize(20);
+
+  // 写回
   for (int i = 0; i < N; ++i) {
-    keyframes_[start_idx + i].p = positions[i];
-    keyframes_[start_idx + i].q = rotations[i].normalized();
-  }
-}
-
-void Backend::gaussNewtonPoseGraph(std::vector<V3d>& positions, std::vector<Qd>& rotations,
-                                   const std::vector<int>& fixed_ids) {
-  int N = static_cast<int>(positions.size());
-  if (N < 2) {
-    return;
+    Eigen::Isometry3d T = vertices[i]->estimate();
+    keyframes_[start_idx + i].q = Eigen::Quaterniond(T.rotation()).normalized();
+    keyframes_[start_idx + i].p = T.translation();
   }
 
-  constexpr int MAX_ITER = 10;
-
-  for (int iter = 0; iter < MAX_ITER; ++iter) {
-    // 构建稀疏系统 (简化实现: 使用稠密矩阵)
-    // 系统矩阵维度: 6*(N - fixed) x 6*(N - fixed)
-    int fixed_count = static_cast<int>(fixed_ids.size());
-    int opt_count = N - fixed_count;
-
-    if (opt_count <= 0) {
-      break;
-    }
-
-    // 构建映射: 原始索引 -> 优化变量索引
-    std::vector<int> var_map(N - 1);
-    int var_idx = 0;
-    for (int i = 0; i < N; ++i) {
-      bool is_fixed = false;
-      for (int fid : fixed_ids) {
-        if (i == fid) {
-          is_fixed = true;
-          break;
-        }
-      }
-      if (!is_fixed) {
-        var_map[i] = var_idx++;
-      }
-    }
-
-    int dim = 6 * opt_count;
-    Eigen::MatrixXd H = Eigen::MatrixXd::Zero(dim, dim);
-    Eigen::VectorXd b = Eigen::VectorXd::Zero(dim);
-
-    // 遍历所有连续帧间约束
-    for (int i = 0; i < N - 1; ++i) {
-      int j = i + 1;
-      // 相对位姿: p_ij, q_ij
-      M3d R_i = rotations[i].toRotationMatrix();
-      M3d R_j = rotations[j].toRotationMatrix();
-
-      // 从初始相对位姿计算 (固定不变)
-      V3d p_ij = R_i.transpose() * (positions[j] - positions[i]);
-
-      // 残差: 当前相对位姿与期望值的差
-      V3d r_p = positions[j] - positions[i] - R_i * p_ij;
-      M3d R_rel = rotations[i].inverse().toRotationMatrix() * R_j;
-      V3d r_theta;
-
-      // @TODO: g2o优化
-    }
-
-    break;
-  }
+  std::cout << "滑动窗口优化完成, 帧数: " << N << std::endl;
 }
 
 void Backend::globalOptimize(const std::vector<LoopPair>& loop_pairs) {
@@ -183,26 +178,85 @@ void Backend::globalOptimize(const std::vector<LoopPair>& loop_pairs) {
 
   int N = static_cast<int>(keyframes_.size());
 
-  // 提取所有位姿
-  std::vector<V3d> positions(N);
-  std::vector<Qd> rotations(N);
+  auto linearSolver = std::make_unique<LinearSolver>();
+  linearSolver->setBlockOrdering(false);
+  auto blockSolver = std::make_unique<BlockSolver>(std::move(linearSolver));
+  auto* algorithm = new g2o::OptimizationAlgorithmLevenberg(std::move(blockSolver));
 
+  g2o::SparseOptimizer optimizer;
+  optimizer.setAlgorithm(algorithm);
+  optimizer.setVerbose(true);
+
+  // 顶点
+  std::vector<g2o::VertexSE3*> vertices(N);
   for (int i = 0; i < N; ++i) {
-    positions[i] = keyframes_[i].p;
-    rotations[i] = keyframes_[i].q;
+    auto* v = new g2o::VertexSE3();
+    v->setId(i);
+
+    Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
+    T.rotate(keyframes_[i].q.toRotationMatrix());
+    T.pretranslate(keyframes_[i].p);
+    v->setEstimate(T);
+
+    if (i == 0) v->setFixed(true);
+    optimizer.addVertex(v);
+    vertices[i] = v;
   }
 
-  // 第1帧固定
-  std::vector<int> fixed_ids = {0};
+  // 帧间约束
+  for (int i = 0; i < N - 1; ++i) {
+    auto* edge = new g2o::EdgeSE3();
+    edge->setVertex(0, vertices[i]);
+    edge->setVertex(1, vertices[i + 1]);
 
-  // @TODO : 执行高斯牛顿 (包括回环约束)
-  // 直接更新关键帧位姿
-  for (int i = 0; i < N; i++) {
-    keyframes_[i].p = positions[i];
-    keyframes_[i].q = rotations[i].normalized();
+    Eigen::Isometry3d T_rel = Eigen::Isometry3d::Identity();
+    T_rel.rotate(keyframes_[i].relative_q.toRotationMatrix());
+    T_rel.pretranslate(keyframes_[i].relative_p);
+    edge->setMeasurement(T_rel);
+
+    Eigen::Matrix<double, 6, 6> info = keyframes_[i].info_mat;
+    if (info.determinant() < 1e-12) {
+      info = Eigen::Matrix<double, 6, 6>::Identity();
+    }
+    edge->setInformation(info);
+    auto* rk = new g2o::RobustKernelHuber();
+    rk->setDelta(0.1);
+    edge->setRobustKernel(rk);
+    optimizer.addEdge(edge);
   }
 
-  std::cout << "全局优化完成，关键帧数：" << N << ",回环约束数：" << loop_pairs.size() << std::endl;
+  // 回环约束
+  for (const auto& lp : loop_pairs) {
+    if (lp.id_a < 0 || lp.id_a >= N || lp.id_b < 0 || lp.id_b >= N) {
+      continue;
+    }
+
+    auto* edge = new g2o::EdgeSE3();
+    edge->setVertex(0, vertices[lp.id_a]);
+    edge->setVertex(1, vertices[lp.id_b]);
+
+    Eigen::Isometry3d T_rel = Eigen::Isometry3d::Identity();
+    T_rel.rotate(lp.rel_q.toRotationMatrix());
+    T_rel.pretranslate(lp.rel_p);
+    edge->setMeasurement(T_rel);
+
+    Eigen::Matrix<double, 6, 6> loop_info = Eigen::Matrix<double, 6, 6>::Identity() * lp.info_weight * 10.0;
+    edge->setInformation(loop_info);
+    optimizer.addEdge(edge);
+  }
+
+  // 优化
+  optimizer.initializeOptimization();
+  optimizer.optimize(50);
+
+  // 写回
+  for (int i = 0; i < N; ++i) {
+    Eigen::Isometry3d T = vertices[i]->estimate();
+    keyframes_[i].q = Eigen::Quaterniond(T.rotation()).normalized();
+    keyframes_[i].p = T.translation();
+  }
+
+  std::cout << "全局优化完成, 关键帧数: " << N << ", 回环约束数: " << loop_pairs.size() << std::endl;
 }
 
 bool Backend::getPose(int id, V3d& p, Qd& q) const {

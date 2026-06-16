@@ -83,15 +83,4 @@ class Backend {
   int window_size_ = 20;  ///< 滑动窗口大小
 
   double last_keyframe_timestamp_ = -1.0;  ///< 上一个关键帧时间戳
-
-  /**
-   * @brief 高斯牛顿位姿图优化
-   *
-   * 优化变量: T_i = [p_i, q_i] ∈ SE(3), i = 1..N
-   * 边: T_j = T_i * T_ij + noise
-   *
-   * 残差: r = [p_j - p_i - R_i * p_ij;
-   *            log(R_iᵀ * R_j * R_ijᵀ)]
-   */
-  void gaussNewtonPoseGraph(std::vector<V3d>& positions, std::vector<Qd>& rotations, const std::vector<int>& fixed_ids);
 };

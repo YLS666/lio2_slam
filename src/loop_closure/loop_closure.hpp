@@ -40,6 +40,11 @@ class LoopClosure {
   void setCandidateNum(int n) { candidate_num_ = n; }
   void setMinScore(double s) { min_score_ = s; }
 
+  /**
+   * @brief 设置关键帧列表指针 (用于几何验证中查找候选帧)
+   */
+  void setKeyframesPtr(const std::deque<KeyFrame>* kfs) { keyframes_ptr_ = kfs; }
+
  private:
   // 历史描述子库
   std::vector<ScanContext::Descriptor> descriptors_;  // 描述子库
@@ -52,6 +57,8 @@ class LoopClosure {
   double icp_score_thresh_ = 0.1;  // ICP配准得分阈值
 
   int last_loop_frame_id_ = -1;  // 上一次回环的帧ID（避免重复检测）
+
+  const std::deque<KeyFrame>* keyframes_ptr_ = nullptr;
 
   /**
    * @brief 几何验证: ICP 配准

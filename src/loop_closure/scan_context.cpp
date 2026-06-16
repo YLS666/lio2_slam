@@ -57,17 +57,26 @@ void ScanContext::make(const CloudPtr& cloud) {
 }
 
 double ScanContext::distance(const Descriptor& a, const Descriptor& b) {
-  // 归一化距离 (0 = 完全相同, 1 = 完全不同)
-  double total_dist = 0.0;
-  double total_count = 0.0;
+  // 对 b 进行列偏移，找到使距离最小的偏移量
+  double min_dist = std::numeric_limits<double>::max();
 
-  for (int r = 0; r < RING_NUM; ++r) {
-    for (int s = 0; s < SECTOR_NUM; ++s) {
-      double diff = a[r][s] - b[r][s];
-      total_dist += diff * diff;
-      total_count += 1.0;
+  for (int shift = 0; shift < SECTOR_NUM; ++shift) {
+    // 归一化距离 (0 = 完全相同, 1 = 完全不同)
+    double total_dist = 0.0;
+    double total_count = 0.0;
+    for (int r = 0; r < RING_NUM; ++r) {
+      for (int s = 0; s < SECTOR_NUM; ++s) {
+        int s_shifted = (s + shift) % SECTOR_NUM;
+        double diff = a[r][s] - b[r][s_shifted];
+        total_dist += diff * diff;
+        total_count += 1.0;
+      }
+    }
+    double dist = std::sqrt(total_dist / total_count);
+    if (dist < min_dist) {
+      min_dist = dist;
     }
   }
 
-  return std::sqrt(total_dist / total_count);
+  return min_dist;
 }

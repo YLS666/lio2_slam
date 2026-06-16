@@ -1,10 +1,12 @@
 #include <iostream>
+#include <sensor_msgs/msg/detail/point_cloud2__struct.hpp>
 #include "cloud_utils/cloud_processor.hpp"
 #include "config_def.hpp"
 #include "frontend/frontend.hpp"
 #include "imu_utils/imu_processor.hpp"
 #include "ros_bridge/bag_io.hpp"
 #include "sync/time_sync.hpp"
+#include "utils/eigen_types.hpp"
 
 int main() {
   std::string CONFIG_PATH = "/home/yls/test_ros/src/lio2_slam/config/config.yaml";
@@ -48,15 +50,21 @@ int main() {
             double dt = s2.timestamp - s1.timestamp;
 
             if (dt > 0 && dt < 0.1) {
+              // s1→s2 的相对旋转: R_rel = R1^T * R2
+              // 增量角速度: omega = Log(R_rel) / dt
+              SE3 T_rel = s1.T.inverse() * s2.T;
+              V3d gyr = T_rel.so3().log() / dt;
+
+              V3d acc = s2.T.unit_quaternion() * V3d(imu_msg.linear_acceleration.x * config.g_norm,
+                                                     imu_msg.linear_acceleration.y * config.g_norm,
+                                                     imu_msg.linear_acceleration.z * config.g_norm);
               // 传入已减 bias 的 IMU 数据
-              frontend->predict(s2.T.so3().log() / dt,    // 从姿态估算角速度
-                                Eigen::Vector3d::Zero(),  // 简化: 传0加速度
-                                dt);
+              frontend->predict(gyr, acc, dt, config.g_norm);
             }
           }
         }
       },
-      [&](const pcl::PointCloud<FullPointType>::Ptr& cloud) {
+      [&](const sensor_msgs::msg::PointCloud2::SharedPtr& cloud) {
         pcl::PointCloud<FullPointType>::Ptr out_cloud(new pcl::PointCloud<FullPointType>());
         cloud_processor.pre_process(cloud, out_cloud);  // 先过滤异常点并补全时间戳
 

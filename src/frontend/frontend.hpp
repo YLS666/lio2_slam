@@ -41,8 +41,9 @@ class Frontend {
    * @param gyr  陀螺仪 (已减 bias)
    * @param acc  加速度计 (已减 bias)
    * @param dt   时间间隔
+   * @param g_norm  重力 (用于姿态校正)
    */
-  void predict(const V3d gyr, const V3d acc, double dt);
+  void predict(const V3d gyr, const V3d acc, double dt, double g_norm = 9.80665);
 
   /**
    * @brief 配准 + 观测更新 (每帧点云数据调用)

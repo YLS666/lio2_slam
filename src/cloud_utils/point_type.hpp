@@ -9,7 +9,8 @@
 
 struct FullPointType {
   PCL_ADD_POINT4D;
-  float intensity = 0;
+  uint16_t intensity = 0;
+  uint16_t ring = 0;
   double timestamp = 0;
 
   inline FullPointType() {}
@@ -17,8 +18,8 @@ struct FullPointType {
 };
 
 POINT_CLOUD_REGISTER_POINT_STRUCT(FullPointType,
-                                  (float, x, x)(float, y, y)(float, z, z)(float, intensity,
-                                                                          intensity)(double, timestamp, timestamp))
+                                  (float, x, x)(float, y, y)(float, z, z)(uint16_t, intensity, intensity)(
+                                      uint16_t, ring, ring)(double, timestamp, timestamp))
 
 using PointType = pcl::PointXYZI;
 using PointCloudType = pcl::PointCloud<PointType>;

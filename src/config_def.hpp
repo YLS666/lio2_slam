@@ -1,5 +1,6 @@
 #pragma once
 
+#include <iostream>
 #include <string>
 #include <vector>
 #include "yaml-cpp/yaml.h"
@@ -20,57 +21,62 @@ class AllConfig {
   double g_norm;
 
   bool init(std::string config_file_path) {
-    YAML::Node config = YAML::LoadFile(config_file_path);
-    if (!config["bag_file"]) {
+    try {
+      YAML::Node config = YAML::LoadFile(config_file_path);
+      if (!config["bag_file"]) {
+        return false;
+      }
+      bag_file = config["bag_file"].as<std::string>();
+
+      if (!config["save_map_path"]) {
+        return false;
+      }
+      save_map_path = config["save_map_path"].as<std::string>();
+
+      if (!config["imu_topic"]) {
+        return false;
+      }
+      imu_topic = config["imu_topic"].as<std::string>();
+
+      if (!config["lidar_topic"]) {
+        return false;
+      }
+      lidar_topic = config["lidar_topic"].as<std::string>();
+
+      if (!config["odom_topic"]) {
+        return false;
+      }
+      odom_topic = config["odom_topic"].as<std::string>();
+
+      if (!config["map_topic"]) {
+        return false;
+      }
+      map_topic = config["map_topic"].as<std::string>();
+
+      if (!config["deskew_cloud_topic"]) {
+        return false;
+      }
+      deskew_cloud_topic = config["deskew_cloud_topic"].as<std::string>();
+
+      if (!config["t_imu_lidar"]) {
+        return false;
+      }
+      t_imu_lidar = config["t_imu_lidar"].as<std::vector<double>>();
+
+      if (!config["r_imu_lidar"]) {
+        return false;
+      }
+      r_imu_lidar = config["r_imu_lidar"].as<std::vector<double>>();
+
+      if (!config["g_norm"]) {
+        return false;
+      }
+      g_norm = config["g_norm"].as<double>();
+
+      return true;
+    } catch (const YAML::Exception& e) {
+      std::cerr << "YAML 解析错误: " << e.what() << std::endl;
       return false;
     }
-    bag_file = config["bag_file"].as<std::string>();
-
-    if (!config["save_map_path"]) {
-      return false;
-    }
-    save_map_path = config["save_map_path"].as<std::string>();
-
-    if (!config["imu_topic"]) {
-      return false;
-    }
-    imu_topic = config["imu_topic"].as<std::string>();
-
-    if (!config["lidar_topic"]) {
-      return false;
-    }
-    lidar_topic = config["lidar_topic"].as<std::string>();
-
-    if (!config["odom_topic"]) {
-      return false;
-    }
-    odom_topic = config["odom_topic"].as<std::string>();
-
-    if (!config["map_topic"]) {
-      return false;
-    }
-    map_topic = config["map_topic"].as<std::string>();
-
-    if (!config["deskew_cloud_topic"]) {
-      return false;
-    }
-    deskew_cloud_topic = config["deskew_cloud_topic"].as<std::string>();
-
-    if (!config["t_imu_lidar"]) {
-      return false;
-    }
-    t_imu_lidar = config["t_imu_lidar"].as<std::vector<double>>();
-
-    if (!config["r_imu_lidar"]) {
-      return false;
-    }
-    r_imu_lidar = config["r_imu_lidar"].as<std::vector<double>>();
-
-    if (!config["g_norm"]) {
-      return false;
-    }
-    g_norm = config["g_norm"].as<double>();
-
-    return true;
-  };
+  }
 };

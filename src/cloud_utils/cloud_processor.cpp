@@ -4,47 +4,79 @@
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 #include <chrono>
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/point_cloud2_iterator.hpp>
+
+template <typename MessageT>
+using PointCloud2ConstIterator = sensor_msgs::PointCloud2ConstIterator<MessageT>;
 
 CloudProcessor::CloudProcessor(AllConfig& config) {
   q_il_ = vecToMat(config.r_imu_lidar).normalized();
   t_il_ = V3d(config.t_imu_lidar.data());
 }
 
-void CloudProcessor::pre_process(const FullCloudPtr& cloud, FullCloudPtr& out_cloud) {
-  out_cloud->clear();
-  out_cloud->reserve(cloud->size());
+void CloudProcessor::pre_process(const sensor_msgs::msg::PointCloud2::SharedPtr& cloud, FullCloudPtr& out_cloud) {
+  try {
+    PointCloud2ConstIterator<float> iter_x(*cloud, "x");
+    PointCloud2ConstIterator<float> iter_y(*cloud, "y");
+    PointCloud2ConstIterator<float> iter_z(*cloud, "z");
+    PointCloud2ConstIterator<float> iter_i(*cloud, "intensity");
+    PointCloud2ConstIterator<double> iter_t(*cloud, "timestamp");
 
-  double start_time = cloud->points.front().timestamp * 1e-9;
-  double end_time = cloud->points.back().timestamp * 1e-9;
-  double dt = (end_time - start_time) / static_cast<double>(cloud->size() - 1);
+    out_cloud->clear();
+    out_cloud->reserve(cloud->width);
 
-  for (size_t i = 0; i < cloud->size(); ++i) {
-    const auto& pt = cloud->points[i];
-    FullPointType new_pt = pt;
-    new_pt.timestamp = static_cast<double>(start_time + static_cast<int>(i) * dt) * 1e9;  // 转换回纳秒
+    // 获取点云第一个点时间
+    uint64_t start =
+        static_cast<uint64_t>(cloud->header.stamp.sec) * 1000000000ULL + cloud->header.stamp.nanosec;  // 以ns为单位
+    // 获取点云最后一个点时间
+    PointCloud2ConstIterator<double> end_t(*cloud, "timestamp");
+    end_t += (static_cast<int32_t>(cloud->width) - 1);
+    uint64_t end = static_cast<uint64_t>(*end_t);
+    // 注意，这里复用了pcl点云类型的stamp和seq，分别用于存储点云起始时间和一帧点云持续时间，单位均为ns
+    out_cloud->header.stamp = start;
+    out_cloud->header.seq = end - start;
 
-    // 过滤异常点（NAN）
-    if (!std::isfinite(new_pt.x) || !std::isfinite(new_pt.y) || !std::isfinite(new_pt.z)) {
-      continue;
+    for (uint32_t point_index = 0; point_index < cloud->width; ++point_index) {
+      FullPointType new_pt;
+      new_pt.x = *iter_x;
+      new_pt.y = *iter_y;
+      new_pt.z = *iter_z;
+      new_pt.intensity = static_cast<uint8_t>(std::clamp(std::round(*iter_i), 0.0f, 65535.0f));
+      new_pt.timestamp = (*iter_t - static_cast<double>(start)) * 1e-9;
+      new_pt.ring = 0;
+
+      ++iter_x;
+      ++iter_y;
+      ++iter_z;
+      ++iter_i;
+      ++iter_t;
+
+      // 过滤异常点（NAN）
+      if (!std::isfinite(new_pt.x) || !std::isfinite(new_pt.y) || !std::isfinite(new_pt.z)) {
+        continue;
+      }
+
+      // 过滤雷达高度以下的点
+      if (new_pt.z < 0) {
+        continue;
+      }
+
+      // 略掉过近的点
+      if (new_pt.getVector3fMap().norm() < 0.5) {
+        continue;
+      }
+
+      out_cloud->push_back(new_pt);
     }
 
-    // 过滤雷达高度以下的点
-    if (new_pt.z < 0) {
-      continue;
-    }
-
-    // 略掉过近的点
-    if (new_pt.getVector3fMap().norm() < 0.5) {
-      continue;
-    }
-
-    out_cloud->push_back(new_pt);
+    out_cloud->width = out_cloud->points.size();
+    out_cloud->height = 1;
+    out_cloud->is_dense = true;
+    return;
+  } catch (const std::exception& e) {
+    std::cerr << "错误的激光点字段，请检查雷达类型配置是否正确";
   }
-
-  out_cloud->width = out_cloud->points.size();
-  out_cloud->height = 1;
-  out_cloud->is_dense = true;
-  return;
 }
 
 CloudPtr CloudProcessor::process(const MeasureGroup& measures, ImuProcessor* imu_processor) {
@@ -141,9 +173,8 @@ CloudPtr CloudProcessor::process(const MeasureGroup& measures, ImuProcessor* imu
                         auto& new_pt = output_cloud->points[i];
 
                         // 点时间
-                        double pt_time = pt.timestamp * 1e-9;
-                        // 查表index
-                        size_t pose_idx = static_cast<size_t>((pt_time - scan_begin) / POSE_DT);
+                        double pt_offset = pt.timestamp;  // 秒级偏移，无需再乘 1e-9
+                        size_t pose_idx = static_cast<size_t>(pt_offset / POSE_DT);
                         // 防止越界
                         pose_idx = std::min(pose_idx, pose_table_.size() - 1);
                         // pose

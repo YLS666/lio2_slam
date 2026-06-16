@@ -1,4 +1,5 @@
 #include "frontend/frontend.hpp"
+#include <Eigen/src/Core/Matrix.h>
 #include <pcl/common/transforms.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/io/pcd_io.h>
@@ -9,34 +10,43 @@ Frontend::Frontend() : last_feature_cloud_(new pcl::PointCloud<PointType>()) {
   eskf_ = std::make_unique<ESKF>();
   backend_ = std::make_unique<Backend>();
   loop_closure_ = std::make_unique<LoopClosure>();
+  loop_closure_->setKeyframesPtr(&backend_->getKeyFrames());
 }
 
 void Frontend::init(const State& init_state) {
   state_ = init_state;
   eskf_->setState(init_state.q, init_state.p, init_state.v);
-  initialized_ = true;
 }
 
-void Frontend::predict(const V3d gyr, const V3d acc, double dt) {
+void Frontend::predict(const V3d gyr, const V3d acc, double dt, double g_norm) {
   if (!initialized_) {
     return;
   }
 
   // ESKF 前向传播
-  eskf_->predict(gyr, acc, dt);
+  eskf_->predict(gyr, acc, dt, g_norm);
 
   // 更新状态 (用于 map 的局部中心)
   state_ = eskf_->getNominalState();
+
+  state_.timestamp += dt;
 }
 
 State Frontend::process(const CloudPtr& cloud) {
   // 初始化
   if (!initialized_) {
-    // 第一帧初始化地图
-    map_->addCloud(cloud);
+    // 降体素避免地图过密
+    CloudPtr init_cloud(new PointCloudType);
+    static pcl::VoxelGrid<PointType> voxel_init;
+    voxel_init.setInputCloud(cloud);
+    voxel_init.setLeafSize(0.2f, 0.2f, 0.2f);
+    voxel_init.filter(*init_cloud);
+
+    map_->addCloud(init_cloud);
     map_->setLocalCenter(state_.p);
     initialized_ = true;
-    std::cout << "地图初始化完成, 点数: " << map_->size() << std::endl;
+
+    std::cout << "初始化完成，地图点数: " << map_->size() << std::endl;
     return state_;
   }
 
@@ -98,23 +108,36 @@ State Frontend::process(const CloudPtr& cloud) {
     std::cout << "map add: " << new_cloud->size() << std::endl;
     std::cout << "map size: " << map_->size() << std::endl;
 
-    // 每隔10帧更新区域
-    if (frame_count_ % 10 == 0) {
-      map_->setLocalCenter(state_.p);
-    }
+    map_->setLocalCenter(state_.p);
   }
 
   // 6. 后端关键帧管理
   Eigen::Matrix<double, 6, 6> info_mat = Eigen::Matrix<double, 6, 6>::Identity();
   Eigen::Matrix<double, 6, 6> cov = reg_->getCovariance();
-  if (cov.norm() > 1e-10) {
-    info_mat = cov.inverse();
+  if (cov.norm() > 1e-10 && cov.norm() < 1e10) {
+    // 协方差正则化：对角线加小量防止奇异
+    Eigen::Matrix<double, 6, 6> cov_reg = cov;
+    cov_reg.diagonal() += Eigen::Matrix<double, 6, 1>::Constant(1e-6);
+    info_mat = cov_reg.inverse();
+
+    // 裁剪过大元素（防止 Hessian 病态导致 Cholesky 失败）
+    constexpr double MAX_INFO = 1e6;
+    for (int i = 0; i < 6; ++i) {
+      for (int j = 0; j < 6; ++j) {
+        if (info_mat(i, j) > MAX_INFO) {
+          info_mat(i, j) = MAX_INFO;
+        }
+        if (info_mat(i, j) < -MAX_INFO) {
+          info_mat(i, j) = -MAX_INFO;
+        }
+      }
+    }
   }
 
   bool is_keyframe = backend_->addKeyFrame(state_, feature_cloud, info_mat);
 
   if (is_keyframe) {
-    // 滑窗优化
+    // 滑窗优化l
     backend_->slideWindowOptimize();
 
     // 更新状态为优化后结果

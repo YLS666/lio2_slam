@@ -53,15 +53,22 @@ inline Eigen::Quaterniond deltaQ(const Eigen::Vector3d& omega) {
 
   Eigen::Quaterniond dq;
 
-  if (theta < 1e-10) {
-    dq.w() = 1.0;
-    dq.x() = 0.5 * omega.x();
-    dq.y() = 0.5 * omega.y();
-    dq.z() = 0.5 * omega.z();
+  if (theta < 1e-6) {
+    double half_theta2 = theta * theta / 8.0;  // 泰勒展开二阶
+    double w = 1.0 - half_theta2;
+    double s = 0.5 * (1.0 - theta * theta / 24.0);  // sin(theta/2)/theta ≈ 0.5
+    dq.w() = w;
+    dq.x() = s * omega.x();
+    dq.y() = s * omega.y();
+    dq.z() = s * omega.z();
   } else {
     Eigen::Vector3d axis = omega / theta;
-
-    dq = Eigen::Quaterniond(Eigen::AngleAxisd(theta, axis));
+    double half_theta = theta * 0.5;
+    double sin_half = std::sin(half_theta);
+    dq.w() = std::cos(half_theta);
+    dq.x() = sin_half * axis.x();
+    dq.y() = sin_half * axis.y();
+    dq.z() = sin_half * axis.z();
   }
 
   return dq.normalized();

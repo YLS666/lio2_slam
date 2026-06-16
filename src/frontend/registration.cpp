@@ -34,6 +34,7 @@ bool Registration::align(const CloudPtr& cloud, VoxelMap* map, State& state) {
       Eigen::Matrix<double, 6, 6> H = Eigen::Matrix<double, 6, 6>::Zero();
       Eigen::Matrix<double, 6, 1> b = Eigen::Matrix<double, 6, 1>::Zero();
       double error = 0.0;
+      double error_raw = 0.0;  // 未加权的残差平方和(用于协方差)
       int count = 0;
 
       // 用于协方差计算的原始 Hessian (不加权)
@@ -95,6 +96,7 @@ bool Registration::align(const CloudPtr& cloud, VoxelMap* map, State& state) {
             // 6. 统计
             local.count++;
             local.error += weight * residual_vec.squaredNorm();
+            local.error_raw += residual_vec.squaredNorm();  // 未加权误差
 
             // 7. 构造 J = [I, -R * skew(p_lidar)]
             J.block<3, 3>(0, 0).setIdentity();
@@ -121,6 +123,7 @@ bool Registration::align(const CloudPtr& cloud, VoxelMap* map, State& state) {
           out.H = a.H + b.H;
           out.b = a.b + b.b;
           out.error = a.error + b.error;
+          out.error_raw = a.error_raw + b.error_raw;
           out.count = a.count + b.count;
           out.H_raw = a.H_raw + b.H_raw;
           return out;
@@ -184,10 +187,9 @@ bool Registration::align(const CloudPtr& cloud, VoxelMap* map, State& state) {
           if (w > 0.5) {
             inlier_count_++;  // 计算内点数
           }
-
-          double sigma2 = result.error / std::max(1, result.count - 6);  // 6个状态变量
-          covariance_ = sigma2 * result.H_raw.inverse();                 // 计算协方差矩阵
         }
+        double sigma2 = result.error_raw / std::max(1, result.count - 6);  // 6个状态变量
+        covariance_ = sigma2 * result.H_raw.inverse();                     // 计算协方差矩阵
       }
     }
 

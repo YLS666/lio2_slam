@@ -62,17 +62,31 @@ include_directories (${OpenCV_INCLUDE_DIRS})
 find_package (yaml-cpp REQUIRED)
 include_directories (${yaml-cpp_INCLUDE_DIRS})
 
-# find_package (G2O REQUIRED)
-# include_directories (${G2O_INCLUDE_DIRS})
+# G2O
+include_directories(/usr/local/include)
+
+find_library(G2O_CORE g2o_core /usr/local/lib)
+find_library(G2O_STUFF g2o_stuff /usr/local/lib)
+find_library(G2O_SOLVER_CHOLMOD g2o_solver_cholmod /usr/local/lib)
+find_library(G2O_TYPES_SLAM3D g2o_types_slam3d /usr/local/lib)
+
+set(G2O_LIBRARIES
+    ${G2O_CORE}
+    ${G2O_STUFF}
+    ${G2O_SOLVER_CHOLMOD}
+    ${G2O_TYPES_SLAM3D}
+)
 
 find_package (Pangolin REQUIRED)
 include_directories (${Pangolin_INCLUDE_DIRS})
+
 
 set (
     third_party_libs
     ${PCL_LIBRARIES}
     yaml-cpp
     tbb
+    ${G2O_LIBRARIES}
 )
 
 include_directories (${PROJECT_SOURCE_DIR}/src)
