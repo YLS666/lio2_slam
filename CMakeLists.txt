@@ -80,6 +80,8 @@ set(G2O_LIBRARIES
 find_package (Pangolin REQUIRED)
 include_directories (${Pangolin_INCLUDE_DIRS})
 
+find_package(glog REQUIRED)
+
 
 set (
     third_party_libs
@@ -87,6 +89,7 @@ set (
     yaml-cpp
     tbb
     ${G2O_LIBRARIES}
+    glog::glog
 )
 
 include_directories (${PROJECT_SOURCE_DIR}/src)

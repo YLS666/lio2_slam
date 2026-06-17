@@ -1,5 +1,6 @@
 #include "frontend/frontend.hpp"
 #include <Eigen/src/Core/Matrix.h>
+#include <glog/logging.h>
 #include <pcl/common/transforms.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/io/pcd_io.h>
@@ -46,7 +47,7 @@ State Frontend::process(const CloudPtr& cloud) {
     map_->setLocalCenter(state_.p);
     initialized_ = true;
 
-    std::cout << "初始化完成，地图点数: " << map_->size() << std::endl;
+    LOG(INFO) << "初始化完成，地图点数: " << map_->size();
     return state_;
   }
 
@@ -58,27 +59,38 @@ State Frontend::process(const CloudPtr& cloud) {
   voxel.setInputCloud(cloud);
   voxel.setLeafSize(0.1f, 0.1f, 0.1f);
   voxel.filter(*ds_cloud);
-  std::cout << "ds_cloud size: " << ds_cloud->size() << std::endl;
+  LOG(INFO) << "ds_cloud size: " << ds_cloud->size();
 
   // 2. 特征采样
   auto feature_cloud = featureSample(ds_cloud);
-  std::cout << "feature_cloud size: " << feature_cloud->size() << std::endl;
+  LOG(INFO) << "feature_cloud size: " << feature_cloud->size();
 
   // 3. 配准
   auto start = std::chrono::steady_clock::now();
 
   State reg_init = state_;  // 用ESKF预测作为初值
   bool reg_success = reg_->align(feature_cloud, map_.get(), reg_init);
+  VLOG(1) << "[Diag] match=" << reg_->getMatchCount() << " inlier=" << reg_->getInlierCount()
+          << " pred_p=" << state_.p.transpose() << " reg_p=" << reg_init.p.transpose()
+          << " dp=" << (reg_init.p - state_.p).norm();
+
+  static int consecutive_failures = 0;
   if (!reg_success) {
-    std::cout << "配准失败, 维持预测状态" << std::endl;
+    consecutive_failures++;
+    LOG(WARNING) << "配准失败（连续 " << consecutive_failures << " 次）, 维持预测状态";
+    if (consecutive_failures > 10) {
+      LOG(ERROR) << "连续配准失败过多，系统可能已发散!";
+    }
     return state_;
   }
+  consecutive_failures = 0;
+
   // 保存原始观测 (用于下次配准的初值)
   raw_obs_state_ = reg_init;
 
   auto end = std::chrono::steady_clock::now();
   std::chrono::duration<double> elapsed = end - start;
-  std::cout << "registration time: " << elapsed.count() * 1000.0 << " ms" << std::endl;
+  LOG(INFO) << "registration time: " << elapsed.count() * 1000.0 << " ms";
 
   // 4. ESKF观测更新
   eskf_->observePose(reg_init.q, reg_init.p);
@@ -105,8 +117,8 @@ State Frontend::process(const CloudPtr& cloud) {
     }
 
     map_->addCloud(new_cloud);
-    std::cout << "map add: " << new_cloud->size() << std::endl;
-    std::cout << "map size: " << map_->size() << std::endl;
+    LOG(INFO) << "map add: " << new_cloud->size();
+    LOG(INFO) << "map size: " << map_->size();
 
     map_->setLocalCenter(state_.p);
   }
@@ -137,18 +149,26 @@ State Frontend::process(const CloudPtr& cloud) {
   bool is_keyframe = backend_->addKeyFrame(state_, feature_cloud, info_mat);
 
   if (is_keyframe) {
-    // 滑窗优化l
     backend_->slideWindowOptimize();
 
-    // 更新状态为优化后结果
     const auto& kfs = backend_->getKeyFrames();
     if (!kfs.empty()) {
       const auto& last_kf = kfs.back();
-      state_.p = last_kf.p;
-      state_.q = last_kf.q;
+
+      double pos_diff = (last_kf.p - state_.p).norm();
+      double angle_diff = 2.0 * std::acos(std::min(1.0, std::abs((state_.q.inverse() * last_kf.q).w())));
+
+      if (pos_diff < 2.0 && angle_diff < 0.5) {  // 2m 和 ~30° 以内才接受
+        state_.p = last_kf.p;
+        state_.q = last_kf.q;
+        // 同时重置 ESKF 状态以保持一致性
+        eskf_->setState(state_.q, state_.p, state_.v);
+        LOG(INFO) << "滑窗优化更新位姿: dp=" << pos_diff << "m, dθ=" << angle_diff << "rad";
+      } else {
+        LOG(WARNING) << "滑窗优化结果异常，拒绝更新: dp=" << pos_diff << "m, dθ=" << angle_diff << "rad";
+      }
     }
 
-    // 回环检测
     tryLoopClosure();
   }
 
@@ -198,7 +218,7 @@ void Frontend::tryLoopClosure() {
   if (frame_count_ % loop_closure_interval_ == 0) {
     std::vector<LoopPair> loop_pairs;
     if (loop_closure_->detect(current_kf, loop_pairs)) {
-      std::cout << "检测到 " << loop_pairs.size() << " 个回环!" << std::endl;
+      LOG(INFO) << "检测到 " << loop_pairs.size() << " 个回环!";
       backend_->globalOptimize(loop_pairs);
 
       const auto& updated_kfs = backend_->getKeyFrames();
@@ -215,9 +235,9 @@ void Frontend::tryLoopClosure() {
 void Frontend::saveMap(const std::string& filename) const {
   auto cloud = map_->getCloud();
   if (cloud->empty()) {
-    std::cout << "地图为空，无法保存" << std::endl;
+    LOG(WARNING) << "地图为空，无法保存";
     return;
   }
   pcl::io::savePCDFileBinary(filename, *cloud);
-  std::cout << "地图保存完成：" << filename << ",  点数：" << cloud->size() << std::endl;
+  LOG(INFO) << "地图保存完成：" << filename << ",  点数：" << cloud->size();
 }

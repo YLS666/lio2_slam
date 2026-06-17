@@ -1,9 +1,5 @@
 #include "backend/backend.hpp"
-#include <Eigen/src/Core/Matrix.h>
-#include <Eigen/src/Geometry/Transform.h>
-#include <g2o/core/robust_kernel.h>
-#include <g2o/core/sparse_optimizer.h>
-#include <g2o/types/slam3d/vertex_se3.h>
+#include <glog/logging.h>
 #include <cmath>
 #include <iostream>
 #include "backend/keyframe.hpp"
@@ -147,7 +143,7 @@ void Backend::slideWindowOptimize() {
     Eigen::Matrix<double, 6, 6> info = kf.info_mat;
     double det = info.determinant();
     if (det < 1e-12 || det > 1e18 || std::isnan(det) || std::isinf(det)) {
-      std::cout << "关键帧 " << kf.id << " 信息矩阵异常(det=" << det << "), 使用单位矩阵" << std::endl;
+      LOG(WARNING) << "关键帧 " << kf.id << " 信息矩阵异常(det=" << det << "), 使用单位矩阵";
       info = Eigen::Matrix<double, 6, 6>::Identity();
     }
     edge->setInformation(info);
@@ -168,7 +164,7 @@ void Backend::slideWindowOptimize() {
     keyframes_[start_idx + i].p = T.translation();
   }
 
-  std::cout << "滑动窗口优化完成, 帧数: " << N << std::endl;
+  LOG(INFO) << "滑动窗口优化完成, 帧数: " << N;
 }
 
 void Backend::globalOptimize(const std::vector<LoopPair>& loop_pairs) {
@@ -256,7 +252,7 @@ void Backend::globalOptimize(const std::vector<LoopPair>& loop_pairs) {
     keyframes_[i].p = T.translation();
   }
 
-  std::cout << "全局优化完成, 关键帧数: " << N << ", 回环约束数: " << loop_pairs.size() << std::endl;
+  LOG(INFO) << "全局优化完成, 关键帧数: " << N << ", 回环约束数: " << loop_pairs.size();
 }
 
 bool Backend::getPose(int id, V3d& p, Qd& q) const {

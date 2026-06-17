@@ -1,4 +1,5 @@
 #include "sync/time_sync.hpp"
+#include <glog/logging.h>
 #include "cloud_utils/point_type.hpp"
 
 TimeSync::TimeSync(ImuProcessor* imu_processor) : imu_processor_(imu_processor) {}
@@ -46,7 +47,7 @@ bool TimeSync::syncMeasure(MeasureGroup& measures) {
   // 当前scan永远不可能再被覆盖
   // 直接丢弃scan
   if (lidar_end_time < imu_begin_time) {
-    std::cout << "lidar too old, drop this scan" << std::endl;
+    LOG(WARNING) << "lidar too old, drop this scan";
     cloud_buffer_.pop_front();
     return false;
   }
@@ -88,13 +89,13 @@ bool TimeSync::syncMeasure(MeasureGroup& measures) {
 
   cloud_buffer_.pop_front();
 
-  std::cout << std::fixed << std::setprecision(9);
-  std::cout << "\n===== TIME SYNC =====" << std::endl;
-  std::cout << "cloud size : " << cloud->size() << std::endl;
-  std::cout << "imu size : " << measures.imu_datas.size() << std::endl;
-  std::cout << "imu state size : " << measures.imu_states.size() << std::endl;
-  std::cout << "lidar begin : " << lidar_begin_time << std::endl;
-  std::cout << "lidar end : " << lidar_end_time << std::endl;
+  LOG(INFO) << std::fixed << std::setprecision(9);
+  LOG(INFO) << "===== TIME SYNC =====";
+  LOG(INFO) << "cloud size : " << cloud->size();
+  LOG(INFO) << "imu size : " << measures.imu_datas.size();
+  LOG(INFO) << "imu state size : " << measures.imu_states.size();
+  LOG(INFO) << "lidar begin : " << lidar_begin_time;
+  LOG(INFO) << "lidar end : " << lidar_end_time;
 
   // 删除所有时间戳 < lidar_end_time + 0.01 的IMU (已消费的帧)
   while (!imu_buffer_.empty()) {

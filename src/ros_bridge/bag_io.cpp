@@ -1,7 +1,6 @@
 #include "bag_io.hpp"
 #include <pcl_conversions/pcl_conversions.h>
 #include <sensor_msgs/msg/detail/point_cloud2__struct.hpp>
-#include "cloud_utils/point_type.hpp"
 #include "rclcpp/serialization.hpp"
 #include "rclcpp/serialized_message.hpp"
 #include "rosbag2_cpp/reader.hpp"

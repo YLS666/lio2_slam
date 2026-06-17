@@ -1,4 +1,5 @@
 #include "frontend/registration.hpp"
+#include <glog/logging.h>
 #include <tbb/tbb.h>
 #include <cstddef>
 #include <iostream>
@@ -130,7 +131,7 @@ bool Registration::align(const CloudPtr& cloud, VoxelMap* map, State& state) {
         });
 
     if (result.count < 50) {
-      std::cout << "配准失败：匹配点数不足（" << result.count << ")" << std::endl;
+      LOG(WARNING) << "配准失败：匹配点数不足（" << result.count << ")";
       return false;
     }
 
@@ -193,8 +194,8 @@ bool Registration::align(const CloudPtr& cloud, VoxelMap* map, State& state) {
       }
     }
 
-    std::cout << "iter = " << iter << " error = " << result.error / result.count << "count = " << result.count
-              << "inlier = " << inlier_count_ << (use_huber_ ? " Huber " : "") << std::endl;
+    LOG(INFO) << "iter = " << iter << " error = " << result.error / result.count << "count = " << result.count
+              << "inlier = " << inlier_count_ << (use_huber_ ? " Huber " : "");
 
     if (dx.norm() < 1e-4) {
       break;

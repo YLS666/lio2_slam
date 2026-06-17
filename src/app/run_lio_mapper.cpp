@@ -1,3 +1,5 @@
+#include <glog/logging.h>
+#include <filesystem>
 #include <iostream>
 #include <sensor_msgs/msg/detail/point_cloud2__struct.hpp>
 #include "cloud_utils/cloud_processor.hpp"
@@ -8,11 +10,32 @@
 #include "sync/time_sync.hpp"
 #include "utils/eigen_types.hpp"
 
-int main() {
-  std::string CONFIG_PATH = "/home/yls/test_ros/src/lio2_slam/config/config.yaml";
+int main(int argc, char** argv) {
+  (void)argc;
 
+  // std::string log_dir = std::string(std::getenv("HOME")) + "/.kx/log";
+  std::string log_dir = "/home/yls/test_ros/src/lio2_slam/log";  // 替换为你的日志目录路径
+  if (!std::filesystem::exists(log_dir)) {
+    LOG(ERROR) << "日志目录不存在: " << log_dir;
+    std::filesystem::create_directories(log_dir);
+  }
+
+  google::InitGoogleLogging(argv[0]);
+  FLAGS_stderrthreshold = 0;      // 所有级别(INFO)都输出到stderr
+  FLAGS_colorlogtostderr = true;  // 终端彩色输出
+  FLAGS_log_dir = log_dir;        // 日志文件存放路径
+  FLAGS_max_log_size = 20;        // 单个日志文件最大 20MB
+  FLAGS_file_line_printf = true;  // 日志中打印文件位置
+  FLAGS_rfc3339_format = false;   // 不使用RFC3339格式
+  // FLAGS_logbuflevel = -1;       // 可选: 关闭缓存立即刷盘
+
+  std::string CONFIG_PATH = "/home/yls/test_ros/src/lio2_slam/config/config.yaml";
   AllConfig config;
-  config.init(CONFIG_PATH);
+  if (!config.init(CONFIG_PATH)) {
+    LOG(ERROR) << "配置文件加载失败: " << CONFIG_PATH;
+    return -1;
+  }
+  LOG(INFO) << "配置文件加载成功: " << CONFIG_PATH;
 
   ImuProcessor imu_processor(config);
   CloudProcessor cloud_processor(config);
@@ -33,10 +56,14 @@ int main() {
   init_state.v.setZero();
   frontend->init(init_state);
 
+  LOG(INFO) << "前端模块初始化完成";
+
   TimeSync time_sync(&imu_processor);
 
   BagIO bag(config);
-  // int frame_count = 0;  // 记录帧数，用于保存map文件名
+
+  LOG(INFO) << "开始处理 bag: " << config.bag_file;
+
   bag.run(
       [&](const sensor_msgs::msg::Imu& imu_msg) {
         if (imu_processor.processImu(imu_msg)) {
@@ -55,11 +82,10 @@ int main() {
               SE3 T_rel = s1.T.inverse() * s2.T;
               V3d gyr = T_rel.so3().log() / dt;
 
-              V3d acc = s2.T.unit_quaternion() * V3d(imu_msg.linear_acceleration.x * config.g_norm,
-                                                     imu_msg.linear_acceleration.y * config.g_norm,
-                                                     imu_msg.linear_acceleration.z * config.g_norm);
+              V3d acc_body(imu_msg.linear_acceleration.x * config.g_norm, imu_msg.linear_acceleration.y * config.g_norm,
+                           imu_msg.linear_acceleration.z * config.g_norm);
               // 传入已减 bias 的 IMU 数据
-              frontend->predict(gyr, acc, dt, config.g_norm);
+              frontend->predict(gyr, acc_body, dt, config.g_norm);
             }
           }
         }
@@ -74,7 +100,7 @@ int main() {
 
         while (time_sync.syncMeasure(measures)) {
           if (measures.imu_datas.size() < 2) {
-            std::cout << "imu不足，跳过当前scan" << std::endl;
+            LOG(WARNING) << "IMU数据不足,跳过当前scan";
             return;
           }
 
@@ -85,8 +111,9 @@ int main() {
       });
 
   frontend->saveMap(config.save_map_path + "all_map.pcd");
-  std::cout << "关键帧数: " << frontend->getKeyframes().size() << std::endl;
-  std::cout << "最终位姿: " << frontend->getState().p.transpose() << std::endl;
+  LOG(INFO) << "关键帧数: " << frontend->getKeyframes().size();
+  LOG(INFO) << "最终位姿: " << frontend->getState().p.transpose();
 
+  google::ShutdownGoogleLogging();
   return 0;
 }

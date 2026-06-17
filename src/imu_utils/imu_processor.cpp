@@ -1,5 +1,5 @@
 #include "imu_processor.hpp"
-
+#include <glog/logging.h>
 #include <iostream>
 
 ImuProcessor::ImuProcessor(AllConfig& config) {
@@ -55,24 +55,24 @@ void ImuProcessor::initializeImu(double t, const V3d& gyr, const V3d& acc) {
   cov_gyr /= static_cast<double>(init_gyrs_.size());
   cov_acc /= static_cast<double>(init_accs_.size());
 
-  std::cout << "cov_gyr = " << cov_gyr.transpose() << " (norm=" << cov_gyr.norm() << ")" << std::endl;
-  std::cout << "cov_acc = " << cov_acc.transpose() << " (norm=" << cov_acc.norm() << ")" << std::endl;
+  LOG(INFO) << "cov_gyr = " << cov_gyr.transpose() << " (norm=" << cov_gyr.norm() << ")";
+  LOG(INFO) << "cov_acc = " << cov_acc.transpose() << " (norm=" << cov_acc.norm() << ")";
 
   // 3. 检查是否满足静止条件（噪声足够小）+ 重试机制
   if (cov_gyr.norm() > kMaxStaticGyrVar || cov_acc.norm() > kMaxStaticAccVar) {
     init_attempt_++;
-    std::cout << "IMU 噪声过大（可能是运动中），正在重试... "
-              << "尝试次数 " << init_attempt_ << " / " << kMaxInitAttempts << std::endl;
+    LOG(WARNING) << "IMU 噪声过大（可能是运动中）,正在重试... "
+                 << "尝试次数 " << init_attempt_ << " / " << kMaxInitAttempts;
 
     if (init_attempt_ >= kMaxInitAttempts) {
-      // 达到最大重试次数：使用降级策略，用默认值初始化
-      std::cout << "IMU 初始化达到最大尝试次数，使用降级默认值" << std::endl;
+      // 达到最大重试次数：使用降级策略,用默认值初始化
+      LOG(WARNING) << "IMU 初始化达到最大尝试次数,使用降级默认值";
 
-      // 零偏使用当前均值（虽然可能有误差，但比0好）
+      // 零偏使用当前均值（虽然可能有误差,但比0好）
       bg_ = mean_gyr;
       ba_.setZero();
 
-      // 重力：使用 mean_acc 方向，长度归一化为 9.80665
+      // 重力：使用 mean_acc 方向,长度归一化为 9.80665
       gravity_dir_ = -mean_acc.normalized();
       acc_scale_ = g_norm_ / mean_acc.norm();
       Qd q0 = Qd::FromTwoVectors(gravity_dir_, V3d(0, 0, -1));
@@ -87,13 +87,13 @@ void ImuProcessor::initializeImu(double t, const V3d& gyr, const V3d& acc) {
       states_.push_back(init_state);
       initialized_ = true;
 
-      std::cout << "========== IMU INIT (FALLBACK) ==========" << std::endl;
-      std::cout << "bg = " << bg_.transpose() << std::endl;
-      std::cout << "ba = " << ba_.transpose() << std::endl;
-      std::cout << "acc_scale_ = " << acc_scale_ << std::endl;
-      std::cout << "IMU init success (fallback)." << std::endl << std::endl;
+      LOG(INFO) << "========== IMU INIT (FALLBACK) ==========";
+      LOG(INFO) << "bg = " << bg_.transpose();
+      LOG(INFO) << "ba = " << ba_.transpose();
+      LOG(INFO) << "acc_scale_ = " << acc_scale_;
+      LOG(INFO) << "IMU init success (fallback).";
     } else {
-      // 未达到最大次数：清空数据，重新采样
+      // 未达到最大次数：清空数据,重新采样
       init_gyrs_.clear();
       init_accs_.clear();
       init_count_ = 0;
@@ -103,7 +103,7 @@ void ImuProcessor::initializeImu(double t, const V3d& gyr, const V3d& acc) {
 
   // 4. 初始化成功：设置零偏
   bg_ = mean_gyr;
-  ba_.setZero();  // 静止时加速度计偏置不可观，设为0
+  ba_.setZero();  // 静止时加速度计偏置不可观,设为0
 
   // 5. 重力缩放
   // 使用 mean_acc 精确校准重力方向和大小
@@ -124,20 +124,20 @@ void ImuProcessor::initializeImu(double t, const V3d& gyr, const V3d& acc) {
   states_.push_back(init_state);
   initialized_ = true;
 
-  std::cout << std::endl;
-  std::cout << "========== IMU INIT ==========" << std::endl;
-  std::cout << "imu samples : " << init_count_ << std::endl;
-  std::cout << "cov_gyr     = " << cov_gyr.transpose() << " (norm=" << cov_gyr.norm() << ")" << std::endl;
-  std::cout << "cov_acc     = " << cov_acc.transpose() << " (norm=" << cov_acc.norm() << ")" << std::endl;
-  std::cout << "bg          = " << bg_.transpose() << std::endl;
-  std::cout << "ba          = " << ba_.transpose() << std::endl;
-  std::cout << "mean acc    = " << mean_acc.transpose() << " (norm=" << mean_acc.norm() << ")" << std::endl;
-  std::cout << "mean gyr    = " << mean_gyr.transpose() << " (norm=" << mean_gyr.norm() << ")" << std::endl;
-  std::cout << "acc_scale   = " << acc_scale_ << std::endl;
-  std::cout << "gravity_dir = " << gravity_dir_.transpose() << std::endl;
-  std::cout << "grav        = " << (gravity_dir_ / gravity_dir_.norm() * g_norm_).transpose() << std::endl;
-  std::cout << "init quat   = " << q0.coeffs().transpose() << std::endl;
-  std::cout << "IMU init success." << std::endl << std::endl;
+  LOG(INFO);
+  LOG(INFO) << "========== IMU INIT ==========";
+  LOG(INFO) << "imu samples : " << init_count_;
+  LOG(INFO) << "cov_gyr     = " << cov_gyr.transpose() << " (norm=" << cov_gyr.norm() << ")";
+  LOG(INFO) << "cov_acc     = " << cov_acc.transpose() << " (norm=" << cov_acc.norm() << ")";
+  LOG(INFO) << "bg          = " << bg_.transpose();
+  LOG(INFO) << "ba          = " << ba_.transpose();
+  LOG(INFO) << "mean acc    = " << mean_acc.transpose() << " (norm=" << mean_acc.norm() << ")";
+  LOG(INFO) << "mean gyr    = " << mean_gyr.transpose() << " (norm=" << mean_gyr.norm() << ")";
+  LOG(INFO) << "acc_scale   = " << acc_scale_;
+  LOG(INFO) << "gravity_dir = " << gravity_dir_.transpose();
+  LOG(INFO) << "grav        = " << (gravity_dir_ / gravity_dir_.norm() * g_norm_).transpose();
+  LOG(INFO) << "init quat   = " << q0.coeffs().transpose();
+  LOG(INFO) << "IMU init success.";
 }
 
 bool ImuProcessor::processImu(const sensor_msgs::msg::Imu& imu) {
@@ -161,7 +161,7 @@ bool ImuProcessor::processImu(const sensor_msgs::msg::Imu& imu) {
   double dt = t - last.timestamp;  // 计算当前帧imu数据与上一帧imu数据的时间差
 
   if (dt <= 0.0 || dt > 0.1) {
-    std::cout << "imu数据时间差不合法，丢弃当前帧数据！ dt = " << dt << std::endl;
+    LOG(WARNING) << "imu数据时间差不合法,丢弃当前帧数据！ dt = " << dt;
     return false;
   }
 
@@ -208,27 +208,27 @@ bool ImuProcessor::processImu(const sensor_msgs::msg::Imu& imu) {
 ImuState ImuProcessor::interpolate(double t) const {
   // 检查是否为空
   if (states_.empty()) {
-    std::cout << "imu数据为空，无法插值！" << std::endl;
+    LOG(WARNING) << "imu数据为空,无法插值！";
     return ImuState();
   }
 
   // 检查时间是否合法
   if (t <= states_.front().timestamp) {
-    std::cout << "imu数据时间回朔，无法插值！ t = " << t << std::endl;
+    LOG(WARNING) << "imu数据时间回朔,无法插值！ t = " << t;
     return states_.front();
   }
   if (t >= states_.back().timestamp) {
-    std::cout << "imu数据时间超出范围，无法插值！ t = " << t << std::endl;
+    LOG(WARNING) << "imu数据时间超出范围,无法插值！ t = " << t;
     return states_.back();
   }
 
   // 插值
   // 找到第一个大于t的元素
-  // 如果找不到，返回最后一个元素
+  // 如果找不到,返回最后一个元素
   auto it = std::lower_bound(states_.begin(), states_.end(), t,
                              [](const ImuState& s, double time) { return s.timestamp < time; });
 
-  // 如果找到的元素是第一个元素，返回第一个元素
+  // 如果找到的元素是第一个元素,返回第一个元素
   if (it == states_.begin()) {
     return *it;
   }

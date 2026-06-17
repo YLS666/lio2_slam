@@ -1,4 +1,5 @@
 #include "cloud_utils/cloud_processor.hpp"
+#include <glog/logging.h>
 #include <pcl/filters/voxel_grid.h>
 #include <rcl/time.h>
 #include <tbb/blocked_range.h>
@@ -75,7 +76,7 @@ void CloudProcessor::pre_process(const sensor_msgs::msg::PointCloud2::SharedPtr&
     out_cloud->is_dense = true;
     return;
   } catch (const std::exception& e) {
-    std::cerr << "错误的激光点字段，请检查雷达类型配置是否正确";
+    LOG(ERROR) << "错误的激光点字段，请检查雷达类型配置是否正确";
   }
 }
 
@@ -89,11 +90,11 @@ CloudPtr CloudProcessor::process(const MeasureGroup& measures, ImuProcessor* imu
     return output_cloud;
   }
   if (measures.imu_states.empty()) {
-    std::cout << "imu states empty, cannot deskew!" << std::endl;
+    LOG(WARNING) << "imu states empty, cannot deskew!";
     return output_cloud;
   }
   if (measures.imu_datas.size() < 2) {
-    std::cout << "imu states not enough" << std::endl;
+    LOG(WARNING) << "imu states not enough";
     return nullptr;
   }
 
@@ -106,11 +107,11 @@ CloudPtr CloudProcessor::process(const MeasureGroup& measures, ImuProcessor* imu
 
   output_cloud->resize(cloud->size());
 
-  std::cout << std::fixed << std::setprecision(9);
-  std::cout << "\n===== DESKEW =====" << std::endl;
-  std::cout << "scan begin : " << measures.lidar_begin_time << std::endl;
-  std::cout << "scan end : " << measures.lidar_end_time << std::endl;
-  std::cout << "cloud size : " << cloud->size() << std::endl;
+  LOG(INFO) << std::fixed << std::setprecision(9);
+  LOG(INFO) << "===== DESKEW =====";
+  LOG(INFO) << "scan begin : " << measures.lidar_begin_time;
+  LOG(INFO) << "scan end : " << measures.lidar_end_time;
+  LOG(INFO) << "cloud size : " << cloud->size();
 
   auto start = std::chrono::system_clock::now();
 
@@ -200,11 +201,11 @@ CloudPtr CloudProcessor::process(const MeasureGroup& measures, ImuProcessor* imu
   output_cloud->width = output_cloud->size();
   output_cloud->height = 1;
   output_cloud->is_dense = true;  // 包含无效点
-  std::cout << "deskew finished." << std::endl;
+  LOG(INFO) << "deskew finished.";
 
   auto end = std::chrono::system_clock::now();
   std::chrono::duration<double> elapsed_seconds = end - start;
-  std::cout << "deskew time: " << elapsed_seconds.count() * 1000 << "ms" << std::endl;
+  LOG(INFO) << "deskew time: " << elapsed_seconds.count() * 1000 << "ms";
 
   return output_cloud;
 }

@@ -24,6 +24,7 @@
   <depend>yaml-cpp</depend>
   <depend>rosbag2_cpp</depend>
   <depend>libboost-thread-dev</depend>
+  <depend>libgoogle-glog-dev</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

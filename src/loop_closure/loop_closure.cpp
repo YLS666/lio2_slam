@@ -1,4 +1,5 @@
 #include "loop_closure/loop_closure.hpp"
+#include <glog/logging.h>
 #include <pcl/common/transforms.h>
 #include <pcl/registration/icp.h>
 #include <algorithm>
@@ -77,7 +78,7 @@ bool LoopClosure::detect(const KeyFrame& current_kf, std::vector<LoopPair>& loop
 
     // 没找到候选帧，跳过
     if (!candidate_kf) {
-      std::cout << "回环检测: 未找到候选关键帧 id=" << candidate_id << std::endl;
+      LOG(WARNING) << "回环检测: 未找到候选关键帧 id=" << candidate_id;
       continue;
     }
 
@@ -99,8 +100,7 @@ bool LoopClosure::detect(const KeyFrame& current_kf, std::vector<LoopPair>& loop
       last_loop_frame_id_ = candidate_id;
       loop_found = true;
 
-      std::cout << "回环检测成功，帧" << candidate_id << "<->帧" << current_kf.id << "，距离：" << scores[c].first
-                << std::endl;
+      LOG(INFO) << "回环检测成功，帧" << candidate_id << "<->帧" << current_kf.id << "，距离：" << scores[c].first;
     }
   }
 

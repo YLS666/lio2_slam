@@ -1,7 +1,6 @@
 #pragma once
 
 #include <functional>
-#include "cloud_utils/point_type.hpp"
 #include "config_def.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
