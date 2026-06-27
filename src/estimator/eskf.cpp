@@ -1,4 +1,5 @@
 #include "estimator/eskf.hpp"
+#include <glog/logging.h>
 #include "utils/eigen_types.hpp"
 
 ESKF::ESKF() { reset(); }
@@ -167,4 +168,24 @@ void ESKF::injectErrorState() {
 
   p_ += dx_.segment<3>(3);
   v_ += dx_.segment<3>(6);
+}
+
+void ESKF::resetWithPose(const Qd& q, const V3d& p, const V3d& v, const Eigen::Matrix<double, 9, 9>& P_reset) {
+  q_ = q.normalized();
+  p_ = p;
+  v_ = v;
+  dx_.setZero();
+
+  // 使用传入的协方差或默认保守值
+  if (P_reset.isIdentity(1e-10)) {
+    P_.setIdentity();
+    P_.block<3, 3>(0, 0) *= 0.01;  // 姿态不确定度 0.01 rad²
+    P_.block<3, 3>(3, 3) *= 0.05;  // 位置不确定度 0.05 m²
+    P_.block<3, 3>(6, 6) *= 0.5;   // 速度不确定度 0.5 (m/s)²
+  } else {
+    P_ = P_reset;
+  }
+
+  initialized_ = true;
+  LOG(INFO) << "[ESKF] 外部位姿重置: p=" << p_.transpose() << " cov_diag=" << P_.diagonal().transpose();
 }

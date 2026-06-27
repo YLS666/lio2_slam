@@ -9,10 +9,6 @@ ImuProcessor::ImuProcessor(AllConfig& config) {
   ba_.setZero();
 }
 
-bool ImuProcessor::isInitialized() const { return initialized_; }
-
-const std::deque<ImuState>& ImuProcessor::getStates() const { return states_; }
-
 void ImuProcessor::updateBias(const V3d& bg, const V3d& ba) {
   bg_ = bg;
   ba_ = ba;
@@ -253,4 +249,19 @@ ImuState ImuProcessor::interpolate(double t) const {
   state.ba = (1.0 - ratio) * s1.ba + ratio * s2.ba;
 
   return state;
+}
+
+void ImuProcessor::resetStates(const SE3& T_reset, const V3d& v_reset) {
+  if (!initialized_ || states_.empty()) {
+    return;
+  }
+  // 计算最后一个 state 与 ESKF 估计的偏差
+  SE3 T_correction = T_reset * states_.back().T.inverse();
+  V3d v_correction = v_reset - states_.back().v;
+
+  // 对整条姿态链施加相同偏移，保持相对运动不变
+  for (auto& s : states_) {
+    s.T = T_correction * s.T;
+    s.v += v_correction;
+  }
 }

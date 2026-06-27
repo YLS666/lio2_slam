@@ -137,6 +137,9 @@ bool Registration::align(const CloudPtr& cloud, VoxelMap* map, State& state) {
 
     match_count_ = result.count;
 
+    LOG(INFO) << "[Match] total_pts=" << cloud->size() << " matched=" << result.count << " ratio=" << std::fixed
+              << std::setprecision(3) << static_cast<float>(result.count) / cloud->size();
+
     // 求解 H * dx = b ， LDLT分解
     Eigen::Matrix<double, 6, 1> dx = result.H.ldlt().solve(result.b);
 
@@ -189,13 +192,31 @@ bool Registration::align(const CloudPtr& cloud, VoxelMap* map, State& state) {
             inlier_count_++;  // 计算内点数
           }
         }
-        double sigma2 = result.error_raw / std::max(1, result.count - 6);  // 6个状态变量
-        covariance_ = sigma2 * result.H_raw.inverse();                     // 计算协方差矩阵
+        double sigma2_weighted = result.error / std::max(1, result.count - 6);
+
+        // SVD 稳健求逆，截断小奇异值防止信息矩阵爆炸
+        Eigen::JacobiSVD<Eigen::Matrix<double, 6, 6>> svd(result.H, Eigen::ComputeFullU | Eigen::ComputeFullV);
+        auto singular_values = svd.singularValues();
+        double max_sv = singular_values(0);
+        constexpr double COND_THRESH = 1e8;
+        Eigen::Vector<double, 6> inv_sv;
+        for (int i = 0; i < 6; ++i) {
+          if (singular_values(i) * COND_THRESH < max_sv) {
+            inv_sv(i) = 0.0;  // 截断小奇异值
+          } else {
+            inv_sv(i) = 1.0 / singular_values(i);
+          }
+        }
+        Eigen::Matrix<double, 6, 6> H_inv = svd.matrixV() * inv_sv.asDiagonal() * svd.matrixU().transpose();
+        covariance_ = sigma2_weighted * H_inv;
+
+        LOG(INFO) << "[Cov] sigma2=" << sigma2_weighted << " sv: " << singular_values.transpose()
+                  << " cov_diag: " << covariance_.diagonal().transpose();
       }
     }
 
-    LOG(INFO) << "iter = " << iter << " error = " << result.error / result.count << "count = " << result.count
-              << "inlier = " << inlier_count_ << (use_huber_ ? " Huber " : "");
+    LOG(INFO) << "iter = " << iter << " error = " << result.error / result.count << " count = " << result.count
+              << " inlier = " << inlier_count_ << (use_huber_ ? " Huber " : "");
 
     if (dx.norm() < 1e-4) {
       break;

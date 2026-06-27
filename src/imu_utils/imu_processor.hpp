@@ -23,12 +23,17 @@ class ImuProcessor {
 
   ImuState interpolate(double t) const;
 
-  bool isInitialized() const;
+  bool isInitialized() const { return initialized_; }
 
-  const std::deque<ImuState>& getStates() const;
+  const std::deque<ImuState>& getStates() const { return states_; }
 
   // online update interface
   void updateBias(const V3d& bg, const V3d& ba);
+
+  /**
+   * @brief 将整条 IMU 姿态链对齐到 ESKF 估计值，保持相对运动不变
+   */
+  void resetStates(const SE3& T_reset, const V3d& v_reset);
 
  private:
   void initializeImu(double t, const V3d& gyr, const V3d& acc);

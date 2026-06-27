@@ -73,6 +73,9 @@ class VoxelMap {
   // 设置新的局部中心点，触发区块加载/卸载
   void setLocalCenter(const V3d& center);
 
+  /** @brief 清空全部地图点 */
+  void clearAll() { voxel_map_.clear(); }
+
  private:
   VoxelKey pointToVoxel(const PointType& pt) const;
   BlockKey voxelToBlock(const VoxelKey& vkey) const;

@@ -61,6 +61,18 @@ class ESKF {
   void observePose(const Qd& q_obs, const V3d& p_obs);
 
   /**
+   * @brief 用外部可靠位姿重置滤波器状态
+   *        用于回环/后端优化后将 IMU 递推归零
+   *
+   * @param q  优化后的姿态
+   * @param p  优化后的位置
+   * @param v  优化后的速度
+   * @param P_reset  重置后的协方差（可选，默认小值）
+   */
+  void resetWithPose(const Qd& q, const V3d& p, const V3d& v,
+                     const Eigen::Matrix<double, 9, 9>& P_reset = Eigen::Matrix<double, 9, 9>::Identity());
+
+  /**
    * @brief 获取校正后的名义状态
    */
   State getNominalState() const {

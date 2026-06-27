@@ -1,10 +1,10 @@
-bag_file: /home/yls/test_data/fast_lio_ros2/bag/bisai
+bag_file: /home/yls/data/slam_tools/bag/changfang/rosbag2_2026_05_07-16_30_57/
 
-save_map_path: /home/yls/test_data/fast_lio_ros2/map/
+save_map_path: /home/yls/data/slam_tools/map/map_0/
 
-imu_topic: /ns1/livox/imu_192_188_1_2
+imu_topic: /ns1/livox/imu_192_168_8_122
 
-lidar_topic: /ns1/livox/lidar_192_188_1_2
+lidar_topic: /ns1/livox/lidar_192_168_8_122
 
 odom_topic: /odom
 

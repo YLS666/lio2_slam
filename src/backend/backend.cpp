@@ -130,20 +130,20 @@ void Backend::slideWindowOptimize() {
 
   // 添加帧间约束边（i->i+1)
   for (int i = 0; i < N - 1; ++i) {
-    const auto& kf = keyframes_[start_idx + i];
+    const auto& kf_next = keyframes_[start_idx + i + 1];
     auto* edge = new g2o::EdgeSE3();
     edge->setVertex(0, vertices[i]);
     edge->setVertex(1, vertices[i + 1]);
 
     Eigen::Isometry3d T_rel = Eigen::Isometry3d::Identity();
-    T_rel.rotate(kf.relative_q.toRotationMatrix());
-    T_rel.pretranslate(kf.relative_p);
+    T_rel.rotate(kf_next.relative_q.toRotationMatrix());
+    T_rel.pretranslate(kf_next.relative_p);
     edge->setMeasurement(T_rel);
 
-    Eigen::Matrix<double, 6, 6> info = kf.info_mat;
+    Eigen::Matrix<double, 6, 6> info = kf_next.info_mat;
     double det = info.determinant();
     if (det < 1e-12 || det > 1e18 || std::isnan(det) || std::isinf(det)) {
-      LOG(WARNING) << "关键帧 " << kf.id << " 信息矩阵异常(det=" << det << "), 使用单位矩阵";
+      LOG(WARNING) << "关键帧 " << kf_next.id << " 信息矩阵异常(det=" << det << "), 使用单位矩阵";
       info = Eigen::Matrix<double, 6, 6>::Identity();
     }
     edge->setInformation(info);
@@ -162,6 +162,21 @@ void Backend::slideWindowOptimize() {
     Eigen::Isometry3d T = vertices[i]->estimate();
     keyframes_[start_idx + i].q = Eigen::Quaterniond(T.rotation()).normalized();
     keyframes_[start_idx + i].p = T.translation();
+  }
+
+  for (int i = 0; i < N - 1; ++i) {
+    const auto& kf_cur = keyframes_[start_idx + i];
+    const auto& kf_next = keyframes_[start_idx + i + 1];
+    // 重新计算相对位姿
+    keyframes_[start_idx + i + 1].relative_q = kf_cur.q.inverse() * kf_next.q;
+    M3d R_cur = kf_cur.q.toRotationMatrix();
+    keyframes_[start_idx + i + 1].relative_p = R_cur.transpose() * (kf_next.p - kf_cur.p);
+  }
+
+  LOG(INFO) << "[SlideWindow] N=" << N << " start_idx=" << start_idx;
+  for (int i = 0; i < N; ++i) {
+    LOG(INFO) << "[SlideWindow] kf_id=" << keyframes_[start_idx + i].id
+              << " p=" << keyframes_[start_idx + i].p.transpose();
   }
 
   LOG(INFO) << "滑动窗口优化完成, 帧数: " << N;
@@ -194,7 +209,9 @@ void Backend::globalOptimize(const std::vector<LoopPair>& loop_pairs) {
     T.pretranslate(keyframes_[i].p);
     v->setEstimate(T);
 
-    if (i == 0) v->setFixed(true);
+    if (i == 0) {
+      v->setFixed(true);
+    }
     optimizer.addVertex(v);
     vertices[i] = v;
   }
@@ -206,11 +223,11 @@ void Backend::globalOptimize(const std::vector<LoopPair>& loop_pairs) {
     edge->setVertex(1, vertices[i + 1]);
 
     Eigen::Isometry3d T_rel = Eigen::Isometry3d::Identity();
-    T_rel.rotate(keyframes_[i].relative_q.toRotationMatrix());
-    T_rel.pretranslate(keyframes_[i].relative_p);
+    T_rel.rotate(keyframes_[i + 1].relative_q.toRotationMatrix());
+    T_rel.pretranslate(keyframes_[i + 1].relative_p);
     edge->setMeasurement(T_rel);
 
-    Eigen::Matrix<double, 6, 6> info = keyframes_[i].info_mat;
+    Eigen::Matrix<double, 6, 6> info = keyframes_[i + 1].info_mat;
     if (info.determinant() < 1e-12) {
       info = Eigen::Matrix<double, 6, 6>::Identity();
     }
@@ -252,6 +269,13 @@ void Backend::globalOptimize(const std::vector<LoopPair>& loop_pairs) {
     keyframes_[i].p = T.translation();
   }
 
+  // 重算所有帧间相对位姿
+  for (int i = 0; i < N - 1; ++i) {
+    keyframes_[i + 1].relative_q = keyframes_[i].q.inverse() * keyframes_[i + 1].q;
+    M3d R_i = keyframes_[i].q.toRotationMatrix();
+    keyframes_[i + 1].relative_p = R_i.transpose() * (keyframes_[i + 1].p - keyframes_[i].p);
+  }
+
   LOG(INFO) << "全局优化完成, 关键帧数: " << N << ", 回环约束数: " << loop_pairs.size();
 }
 
@@ -264,4 +288,25 @@ bool Backend::getPose(int id, V3d& p, Qd& q) const {
     }
   }
   return false;
+}
+
+void Backend::markKeyframesMerged(const std::vector<int>& ids) {
+  for (int id : ids) {
+    for (auto& kf : keyframes_) {
+      if (kf.id == id) {
+        kf.merged = true;
+        break;
+      }
+    }
+  }
+}
+
+bool Backend::getWindowFirstPose(V3d& p, Qd& q) const {
+  if (keyframes_.empty()) {
+    return false;
+  }
+  int start_idx = std::max(0, static_cast<int>(keyframes_.size()) - window_size_);
+  p = keyframes_[start_idx].p;
+  q = keyframes_[start_idx].q;
+  return true;
 }

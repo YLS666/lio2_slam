@@ -73,6 +73,18 @@ class Backend {
   /** @brief 根据帧ID获取位姿 */
   bool getPose(int d, V3d& p, Qd& q) const;
 
+  /**
+   * @brief 标记指定关键帧已合并到地图
+   *
+   * @param ids  已合并的关键帧 ID 列表
+   */
+  void markKeyframesMerged(const std::vector<int>& ids);
+
+  /**
+   * @brief 获取滑动窗口中第一帧的位姿（用于边缘化约束）
+   */
+  bool getWindowFirstPose(V3d& p, Qd& q) const;
+
  private:
   std::deque<KeyFrame> keyframes_;  ///< 关键帧列表
 
