@@ -21,10 +21,11 @@ void ESKF::reset() {
   initialized_ = false;
 }
 
-void ESKF::setState(const Qd& q, const V3d& p, const V3d& v) {
+void ESKF::setState(const Qd& q, const V3d& p, const V3d& v, double timestamp) {
   q_ = q.normalized();
   p_ = p;
   v_ = v;
+  timestamp_ = timestamp;
   dx_.setZero();
   initialized_ = true;
 }
@@ -108,13 +109,14 @@ void ESKF::predict(const V3d& gyr, const V3d& acc, double dt, double g_norm) {
   q_ = q_new;
   p_ = p_new;
   v_ = v_new;
+  timestamp_ += dt;
 
   dx_.setZero();  // 误差状态清零
 }
 
 void ESKF::observePose(const Qd& q_obs, const V3d& p_obs) {
   if (!initialized_) {
-    setState(q_obs, p_obs, V3d::Zero());
+    setState(q_obs, p_obs, V3d::Zero(), 0.0);
     return;
   }
 

@@ -17,7 +17,7 @@ class ESKF {
   /**
    *@brief: 设置初始名义状态
    */
-  void setState(const Qd& q, const V3d& p, const V3d& v);
+  void setState(const Qd& q, const V3d& p, const V3d& v, double timestamp = 0.0);
 
   /**
    *@brief: 设置初始化协方差和噪声
@@ -80,6 +80,7 @@ class ESKF {
     s.q = q_;
     s.p = p_;
     s.v = v_;
+    s.timestamp = timestamp_;  // 保存时间戳，用于后端优化时的边缘化
     return s;
   }
 
@@ -113,9 +114,10 @@ class ESKF {
   V3d getPredictedVel() const { return v_; }
 
  private:
-  Qd q_;   // 名义姿态
-  V3d p_;  // 位置
-  V3d v_;  // 速度
+  Qd q_;                    // 名义姿态
+  V3d p_;                   // 位置
+  V3d v_;                   // 速度
+  double timestamp_ = 0.0;  // 时间戳
 
   Eigen::Matrix<double, 9, 9> P_;  // 协方差矩阵
 

@@ -137,7 +137,7 @@ void ImuProcessor::initializeImu(double t, const V3d& gyr, const V3d& acc) {
 }
 
 bool ImuProcessor::processImu(const sensor_msgs::msg::Imu& imu) {
-  double t = imu.header.stamp.sec + imu.header.stamp.nanosec * 1e-9;  // 1778046511.092436
+  double t = imu.header.stamp.sec + imu.header.stamp.nanosec * 1e-9;  // s
 
   V3d gyr(imu.angular_velocity.x, imu.angular_velocity.y, imu.angular_velocity.z);
   V3d acc(imu.linear_acceleration.x, imu.linear_acceleration.y, imu.linear_acceleration.z);

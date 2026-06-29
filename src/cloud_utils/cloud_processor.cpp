@@ -84,9 +84,11 @@ CloudPtr CloudProcessor::process(const MeasureGroup& measures, ImuProcessor* imu
   CloudPtr output_cloud(new PointCloudType());
 
   if (!measures.lidar) {
+    LOG(WARNING) << "lidar is nullptr, cannot deskew!";
     return output_cloud;
   }
   if (measures.lidar->empty()) {
+    LOG(WARNING) << "lidar is empty, cannot deskew!";
     return output_cloud;
   }
   if (measures.imu_states.empty()) {
@@ -107,11 +109,9 @@ CloudPtr CloudProcessor::process(const MeasureGroup& measures, ImuProcessor* imu
 
   output_cloud->resize(cloud->size());
 
-  LOG(INFO) << std::fixed << std::setprecision(9);
-  LOG(INFO) << "===== DESKEW =====";
-  LOG(INFO) << "scan begin : " << measures.lidar_begin_time;
-  LOG(INFO) << "scan end : " << measures.lidar_end_time;
-  LOG(INFO) << "cloud size : " << cloud->size();
+  LOG(INFO) << std::fixed << std::setprecision(9) << "===== DESKEW ====="
+            << "\nscan begin : " << measures.lidar_begin_time << "\nscan end : " << measures.lidar_end_time
+            << "\ncloud size : " << cloud->size();
 
   auto start = std::chrono::system_clock::now();
 

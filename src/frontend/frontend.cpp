@@ -16,7 +16,7 @@ Frontend::Frontend() : last_feature_cloud_(new pcl::PointCloud<PointType>()) {
 
 void Frontend::init(const State& init_state) {
   state_ = init_state;
-  eskf_->setState(init_state.q, init_state.p, init_state.v);
+  eskf_->setState(init_state.q, init_state.p, init_state.v, init_state.timestamp);
 }
 
 void Frontend::predict(const V3d gyr, const V3d acc, double dt, double g_norm) {
@@ -79,7 +79,11 @@ State Frontend::process(const CloudPtr& cloud) {
 
   // 4: ESKF 观测更新
   eskf_->observePose(reg_init.q, reg_init.p);
+  double state_ts = state_.timestamp;
   state_ = eskf_->getNominalState();
+  if (state_.timestamp == 0.0) {
+    state_.timestamp = state_ts;  // 重置时间戳
+  }
 
   // 5: 构建信息矩阵
   Eigen::Matrix<double, 6, 6> info_mat = Eigen::Matrix<double, 6, 6>::Identity();
@@ -220,7 +224,7 @@ void Frontend::saveMap(const std::string& filename) const {
 
 void Frontend::resetESKFWithOptimizedPose(const State& state) {
   // 将 ESKF 的名义状态重置为优化后的可靠位姿
-  eskf_->setState(state.q, state.p, state.v);
+  eskf_->setState(state.q, state.p, state.v, state.timestamp);
 
   // 重置协方差：给旋转和平移小幅不确定性，速度较大不确定性
   Eigen::Matrix<double, 9, 9> P_new = Eigen::Matrix<double, 9, 9>::Identity();
@@ -321,12 +325,14 @@ void Frontend::propagateFromTrustedPose(const std::vector<ImuState>& imu_states,
 
   // 起点始终是 state_（上一帧配准/后端给出的可靠位姿）
   // 不从上次 predict 结果继续，而是每次重新 setState
-  eskf_->setState(state_.q, state_.p, state_.v);
+  eskf_->setState(state_.q, state_.p, state_.v, state_.timestamp);
 
   // 找到相对于 cloud_time 的最近 IMU 帧
   // 从 state_ 的时间戳到 cloud_time 之间的 IMU 数据
   double start_time = state_.timestamp;
 
+  int propagate_count = 0;
+  constexpr int MAX_PROPAGATE_STATES = 50;  // 最多处理50个状态对
   for (size_t i = 0; i < imu_states.size() - 1; ++i) {
     const auto& s1 = imu_states[i];
     const auto& s2 = imu_states[i + 1];
@@ -337,6 +343,11 @@ void Frontend::propagateFromTrustedPose(const std::vector<ImuState>& imu_states,
     }
     if (s1.timestamp > cloud_time) {
       break;
+    }
+
+    if (++propagate_count > MAX_PROPAGATE_STATES) {
+      LOG(WARNING) << "[IMU Propagate] 处理状态过多(" << propagate_count << ")，可能时间戳异常，强制截断";
+      break;  // 跳过后续 IMU 数据
     }
 
     double dt = s2.timestamp - s1.timestamp;

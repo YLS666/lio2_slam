@@ -43,9 +43,6 @@ bool TimeSync::syncMeasure(MeasureGroup& measures) {
   double imu_last_time = imu_buffer_.back().header.stamp.sec + imu_buffer_.back().header.stamp.nanosec * 1e-9;
 
   // 情况1：lidar太旧
-  // 当前imu缓存已经走到更后面了
-  // 当前scan永远不可能再被覆盖
-  // 直接丢弃scan
   if (lidar_end_time < imu_begin_time) {
     LOG(WARNING) << "lidar too old, drop this scan";
     cloud_buffer_.pop_front();
@@ -53,55 +50,89 @@ bool TimeSync::syncMeasure(MeasureGroup& measures) {
   }
 
   // 情况2：imu还没覆盖scan
-  // 继续等待imu
   if (imu_last_time < lidar_end_time) {
     return false;
   }
 
   measures.lidar = cloud;
+  cloud_buffer_.pop_front();
   measures.lidar_begin_time = lidar_begin_time;
   measures.lidar_end_time = lidar_end_time;
   measures.imu_datas.clear();
 
-  for (const auto& imu : imu_buffer_) {
+  // 保留： scan开始前一个imu - scan结束后一个imu
+  bool found_begin = false;
+
+  for (size_t i = 0; i < imu_buffer_.size(); ++i) {
+    const auto& imu = imu_buffer_[i];
+
     double imu_time = imu.header.stamp.sec + imu.header.stamp.nanosec * 1e-9;
 
-    if (imu_time < lidar_begin_time - 0.01) {
-      continue;
-    }
+    if (!found_begin) {
+      if (imu_time >= lidar_begin_time) {
+        // 保留scan开始前一个imu
+        if (i > 0) {
+          measures.imu_datas.push_back(imu_buffer_[i - 1]);
+        }
 
-    if (imu_time > lidar_end_time + 0.01) {
-      break;
+        found_begin = true;
+      } else {
+        continue;
+      }
     }
 
     measures.imu_datas.push_back(imu);
+
+    // 保留scan结束之后一个imu
+    if (imu_time > lidar_end_time) {
+      break;
+    }
   }
+
+  if (measures.imu_datas.size() < 2) {
+    LOG(WARNING) << "Not enough imu data.";
+    return false;
+  }
+
+  double measure_start_time =
+      measures.imu_datas.front().header.stamp.sec + measures.imu_datas.front().header.stamp.nanosec * 1e-9;  // s
+  double measure_end_time =
+      measures.imu_datas.back().header.stamp.sec + measures.imu_datas.back().header.stamp.nanosec * 1e-9;  // s
 
   // 从ImuProcessor裁剪状态
   const auto& all_states = imu_processor_->getStates();
-  auto begin_it = std::lower_bound(all_states.begin(), all_states.end(), lidar_begin_time - 0.01,
+  auto begin_it = std::lower_bound(all_states.begin(), all_states.end(), measure_start_time,
                                    [](const ImuState& s, double t) { return s.timestamp < t; });
+  if (begin_it != all_states.begin()) {
+    --begin_it;
+  }
 
-  auto end_it = std::lower_bound(all_states.begin(), all_states.end(), lidar_end_time + 0.01,
-                                 [](const ImuState& s, double t) { return s.timestamp < t; });
+  auto end_it = std::upper_bound(all_states.begin(), all_states.end(), measure_end_time,
+                                 [](double t, const ImuState& s) { return t < s.timestamp; });
+
+  if (end_it != all_states.end()) {
+    ++end_it;
+  }
 
   measures.imu_states.assign(begin_it, end_it);
-
-  cloud_buffer_.pop_front();
 
   LOG(INFO) << std::fixed << std::setprecision(9);
   LOG(INFO) << "===== TIME SYNC =====";
   LOG(INFO) << "cloud size : " << cloud->size();
   LOG(INFO) << "imu size : " << measures.imu_datas.size();
   LOG(INFO) << "imu state size : " << measures.imu_states.size();
-  LOG(INFO) << "lidar begin : " << lidar_begin_time;
-  LOG(INFO) << "lidar end : " << lidar_end_time;
+  LOG(INFO) << std::fixed << std::setprecision(9) << "lidar begin : " << lidar_begin_time
+            << "\nlidar end : " << lidar_end_time;
+  LOG(INFO) << std::fixed << std::setprecision(9) << "imu begin : " << imu_begin_time
+            << "\nlast imu : " << imu_last_time;
+  LOG(INFO) << std::fixed << std::setprecision(9) << "measure start : " << measure_start_time
+            << "\nmeasure end : " << measure_end_time;
 
-  // 删除所有时间戳 < lidar_end_time + 0.01 的IMU (已消费的帧)
-  while (!imu_buffer_.empty()) {
-    double imu_time = imu_buffer_.front().header.stamp.sec + imu_buffer_.front().header.stamp.nanosec * 1e-9;
+  // 删除已经消费的IMU，但保留最后一个IMU，供下一帧作为scan开始之前那个IMU
+  while (imu_buffer_.size() > 1) {
+    double next_time = imu_buffer_[1].header.stamp.sec + imu_buffer_[1].header.stamp.nanosec * 1e-9;
 
-    if (imu_time < lidar_end_time + 0.01) {
+    if (next_time <= lidar_end_time) {
       imu_buffer_.pop_front();
     } else {
       break;
