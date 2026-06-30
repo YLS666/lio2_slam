@@ -94,39 +94,28 @@ bool TimeSync::syncMeasure(MeasureGroup& measures) {
     return false;
   }
 
-  double measure_start_time =
+  double measure_imu_start_time =
       measures.imu_datas.front().header.stamp.sec + measures.imu_datas.front().header.stamp.nanosec * 1e-9;  // s
-  double measure_end_time =
+  double measure_imu_end_time =
       measures.imu_datas.back().header.stamp.sec + measures.imu_datas.back().header.stamp.nanosec * 1e-9;  // s
 
   // 从ImuProcessor裁剪状态
   const auto& all_states = imu_processor_->getStates();
-  auto begin_it = std::lower_bound(all_states.begin(), all_states.end(), measure_start_time,
+  auto begin_it = std::lower_bound(all_states.begin(), all_states.end(), measure_imu_start_time,
                                    [](const ImuState& s, double t) { return s.timestamp < t; });
-  if (begin_it != all_states.begin()) {
-    --begin_it;
-  }
 
-  auto end_it = std::upper_bound(all_states.begin(), all_states.end(), measure_end_time,
+  auto end_it = std::upper_bound(all_states.begin(), all_states.end(), measure_imu_end_time,
                                  [](double t, const ImuState& s) { return t < s.timestamp; });
-
-  if (end_it != all_states.end()) {
-    ++end_it;
-  }
 
   measures.imu_states.assign(begin_it, end_it);
 
-  LOG(INFO) << std::fixed << std::setprecision(9);
-  LOG(INFO) << "===== TIME SYNC =====";
   LOG(INFO) << "cloud size : " << cloud->size();
   LOG(INFO) << "imu size : " << measures.imu_datas.size();
   LOG(INFO) << "imu state size : " << measures.imu_states.size();
   LOG(INFO) << std::fixed << std::setprecision(9) << "lidar begin : " << lidar_begin_time
-            << "\nlidar end : " << lidar_end_time;
-  LOG(INFO) << std::fixed << std::setprecision(9) << "imu begin : " << imu_begin_time
-            << "\nlast imu : " << imu_last_time;
-  LOG(INFO) << std::fixed << std::setprecision(9) << "measure start : " << measure_start_time
-            << "\nmeasure end : " << measure_end_time;
+            << "  lidar end : " << lidar_end_time;
+  LOG(INFO) << std::fixed << std::setprecision(9) << "imu begin : " << measure_imu_start_time
+            << "  imu end : " << measure_imu_end_time;
 
   // 删除已经消费的IMU，但保留最后一个IMU，供下一帧作为scan开始之前那个IMU
   while (imu_buffer_.size() > 1) {

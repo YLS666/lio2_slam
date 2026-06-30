@@ -62,4 +62,7 @@ class ImuProcessor {
   V3d gravity_;
   V3d bg_;
   V3d ba_;
+  V3d last_gyr_;
+  V3d last_acc_;
+  bool has_last_imu_ = false;
 };

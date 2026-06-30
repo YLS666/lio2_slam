@@ -109,10 +109,6 @@ CloudPtr CloudProcessor::process(const MeasureGroup& measures, ImuProcessor* imu
 
   output_cloud->resize(cloud->size());
 
-  LOG(INFO) << std::fixed << std::setprecision(9) << "===== DESKEW ====="
-            << "\nscan begin : " << measures.lidar_begin_time << "\nscan end : " << measures.lidar_end_time
-            << "\ncloud size : " << cloud->size();
-
   auto start = std::chrono::system_clock::now();
 
   // pose间隔
@@ -201,7 +197,6 @@ CloudPtr CloudProcessor::process(const MeasureGroup& measures, ImuProcessor* imu
   output_cloud->width = output_cloud->size();
   output_cloud->height = 1;
   output_cloud->is_dense = true;  // 包含无效点
-  LOG(INFO) << "deskew finished.";
 
   auto end = std::chrono::system_clock::now();
   std::chrono::duration<double> elapsed_seconds = end - start;

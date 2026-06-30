@@ -77,6 +77,8 @@ class Frontend {
 
   bool lastRegSuccess() const { return last_reg_success_; }
 
+  bool isDiverged() const { return diverged_; }
+
   /**
    * @brief 短期 IMU 递推（每次点云帧处理前调用一次）
    *
@@ -112,6 +114,7 @@ class Frontend {
   CloudPtr last_feature_cloud_;
 
   bool last_reg_success_ = false;
+  bool diverged_ = false;
 
   /**
    * @brief 每隔 N 帧触发一次回环检测

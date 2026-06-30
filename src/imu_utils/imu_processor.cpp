@@ -119,6 +119,9 @@ void ImuProcessor::initializeImu(double t, const V3d& gyr, const V3d& acc) {
 
   states_.push_back(init_state);
   initialized_ = true;
+  last_gyr_ = mean_gyr;
+  last_acc_ = mean_acc;
+  has_last_imu_ = true;
 
   LOG(INFO);
   LOG(INFO) << "========== IMU INIT ==========";
@@ -165,19 +168,26 @@ bool ImuProcessor::processImu(const sensor_msgs::msg::Imu& imu) {
   gyr -= bg_;
   acc -= ba_;
 
-  // SO3更新
-  V3d omega = gyr * dt;   // 计算当前帧imu数据的角速度
-  Qd dq = deltaQ(omega);  // 计算当前帧imu数据的旋转矩阵
+  if (!has_last_imu_) {
+    last_gyr_ = gyr;
+    last_acc_ = acc;
+    has_last_imu_ = true;
+  }
 
-  ImuState state;
-  state.timestamp = t;
-  // 姿态更新：当前帧的姿态 = 上一帧的姿态 * 当前帧的增量旋转
+  // 中值
+  V3d gyr_mid = 0.5 * (last_gyr_ + gyr);
+  V3d acc_mid = 0.5 * (last_acc_ + acc);
+  // 姿态积分
+  Qd dq = deltaQ(gyr_mid * dt);
   Qd q = last.T.unit_quaternion() * dq;
   q.normalize();
   // 加速度更新：当前帧的加速度 = 当前帧的旋转矩阵 * 当前帧的加速度 + 重力(一般为-g)
-  V3d acc_world = q * acc + gravity_;
+  Eigen::Quaterniond q_mid = last.T.unit_quaternion().slerp(0.5, q);
+  V3d acc_world = q_mid * acc_mid + gravity_;
   // 位姿更新：当前帧的位姿 = 上一帧的位姿 + 上一帧的线速度 * 时间差 + 0.5 * 加速度 * 时间差平方
   V3d p = last.T.translation() + last.v * dt + 0.5 * acc_world * dt * dt;
+  ImuState state;
+  state.timestamp = t;
   state.T = SE3(q, p);
   // 速度更新：当前帧的速度 = 上一帧的速度 + 当前帧的加速度 * 时间差
   state.v = last.v + acc_world * dt;
@@ -186,6 +196,9 @@ bool ImuProcessor::processImu(const sensor_msgs::msg::Imu& imu) {
   state.ba = ba_;
 
   states_.push_back(state);
+
+  last_gyr_ = gyr;
+  last_acc_ = acc;
 
   // 数据清理
   while (!states_.empty()) {

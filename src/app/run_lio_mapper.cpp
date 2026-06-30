@@ -58,63 +58,70 @@ int main(int argc, char** argv) {
 
   LOG(INFO) << "开始处理 bag: " << config.bag_file;
 
-  // int count = 0;
+  int count = 0;
+  try {
+    bag.run(
+        [&](const sensor_msgs::msg::Imu& imu_msg) {
+          if (imu_processor.processImu(imu_msg)) {
+            static bool init_done = false;
+            if (!init_done && !frontend->isInitialized()) {
+              const auto& states = imu_processor.getStates();
+              if (!states.empty()) {
+                State init_state;
+                init_state.q = states.front().T.unit_quaternion();
+                init_state.p = V3d::Zero();
+                init_state.v = V3d::Zero();
+                init_state.timestamp = states.front().timestamp;
+                frontend->init(init_state);
+                init_done = true;
+                LOG(INFO) << "ESKF 用 IMU 重力对齐姿态初始化: q=" << init_state.q.coeffs().transpose();
+              }
+            }
+            time_sync.pushImu(imu_msg);
+          }
+        },
+        [&](const sensor_msgs::msg::PointCloud2::SharedPtr& cloud) {
+          pcl::PointCloud<FullPointType>::Ptr out_cloud(new pcl::PointCloud<FullPointType>());
+          cloud_processor.pre_process(cloud, out_cloud);
+          time_sync.pushCloud(out_cloud);
 
-  bag.run(
-      [&](const sensor_msgs::msg::Imu& imu_msg) {
-        if (imu_processor.processImu(imu_msg)) {
-          static bool init_done = false;
-          if (!init_done && !frontend->isInitialized()) {
-            const auto& states = imu_processor.getStates();
-            if (!states.empty()) {
-              State init_state;
-              init_state.q = states.front().T.unit_quaternion();
-              init_state.p = V3d::Zero();
-              init_state.v = V3d::Zero();
-              init_state.timestamp = states.front().timestamp;
-              frontend->init(init_state);
-              init_done = true;
-              LOG(INFO) << "ESKF 用 IMU 重力对齐姿态初始化: q=" << init_state.q.coeffs().transpose();
+          MeasureGroup measures;
+          while (time_sync.syncMeasure(measures)) {
+            if (measures.imu_datas.size() < 2) {
+              LOG(WARNING) << "IMU数据不足,跳过当前scan";
+              continue;
+            }
+
+            auto deskew_cloud = cloud_processor.process(measures, &imu_processor);
+            if (!deskew_cloud || deskew_cloud->empty()) {
+              continue;
+            }
+
+            std::string map_path = config.save_map_path + "frame_" + std::to_string(count++) + ".pcd";
+            pcl::io::savePCDFileBinary(map_path, *deskew_cloud);
+            LOG(INFO) << "保存关键帧地图: " << map_path;
+
+            // 短期 IMU 递推
+            const auto& imu_queue = imu_processor.getStates();
+            std::vector<ImuState> imu_vec(imu_queue.begin(), imu_queue.end());
+            double cloud_time = measures.lidar_end_time;
+            frontend->propagateFromTrustedPose(imu_vec, measures.imu_datas, cloud_time, config.g_norm);
+
+            frontend->process(deskew_cloud);
+
+            // 检测系统是否发散
+            if (frontend->isDiverged()) {
+              throw std::runtime_error("Registration diverged, stopping");
             }
           }
-          time_sync.pushImu(imu_msg);
-        }
-      },
-      [&](const sensor_msgs::msg::PointCloud2::SharedPtr& cloud) {
-        pcl::PointCloud<FullPointType>::Ptr out_cloud(new pcl::PointCloud<FullPointType>());
-        cloud_processor.pre_process(cloud, out_cloud);
-        time_sync.pushCloud(out_cloud);
 
-        MeasureGroup measures;
-        while (time_sync.syncMeasure(measures)) {
-          if (measures.imu_datas.size() < 2) {
-            LOG(WARNING) << "IMU数据不足,跳过当前scan";
-            continue;
-          }
-
-          auto deskew_cloud = cloud_processor.process(measures, &imu_processor);
-          if (!deskew_cloud || deskew_cloud->empty()) {
-            continue;
-          }
-
-          // std::string map_path = config.save_map_path + "frame_" + std::to_string(count++) + ".pcd";
-          // pcl::io::savePCDFileBinary(map_path, *deskew_cloud);
-          // LOG(INFO) << "保存关键帧地图: " << map_path;
-
-          // 短期 IMU 递推
-          // 将 imu_processor 的 states_ 队列转换为 vector 传入
-          const auto& imu_queue = imu_processor.getStates();
-          std::vector<ImuState> imu_vec(imu_queue.begin(), imu_queue.end());
-          double cloud_time = measures.lidar_end_time;
-          frontend->propagateFromTrustedPose(imu_vec, measures.imu_datas, cloud_time, config.g_norm);
-
-          frontend->process(deskew_cloud);
-        }
-
-        // 对齐 IMU 姿态链到 ESKF 估计值
-        State latest = frontend->getState();
-        imu_processor.resetStates(SE3(latest.q, latest.p), latest.v);
-      });
+          // 对齐 IMU 姿态链到 ESKF 估计值
+          State latest = frontend->getState();
+          imu_processor.resetStates(SE3(latest.q, latest.p), latest.v);
+        });
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "程序异常终止: " << e.what();
+  }
 
   frontend->saveMap(config.save_map_path + "all_map.pcd");
   LOG(INFO) << "关键帧数: " << frontend->getKeyframes().size();

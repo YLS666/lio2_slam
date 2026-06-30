@@ -64,18 +64,13 @@ State Frontend::process(const CloudPtr& cloud) {
   bool reg_success = reg_->align(feature_cloud, map_.get(), reg_init);
 
   // 3: 配准失败处理
-  static int consecutive_failures = 0;
   if (!reg_success) {
-    consecutive_failures++;
-    LOG(WARNING) << "配准失败（连续 " << consecutive_failures << " 次）, 维持预测状态";
-    if (consecutive_failures > 10) {
-      LOG(ERROR) << "连续配准失败过多，系统可能已发散!";
-    }
+    LOG(ERROR) << "配准失败，系统发散! 停止递推，准备保存地图退出...";
+    diverged_ = true;
     last_reg_success_ = false;
     return state_;
   }
   last_reg_success_ = true;
-  consecutive_failures = 0;
 
   // 4: ESKF 观测更新
   eskf_->observePose(reg_init.q, reg_init.p);

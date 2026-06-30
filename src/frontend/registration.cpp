@@ -130,7 +130,7 @@ bool Registration::align(const CloudPtr& cloud, VoxelMap* map, State& state) {
           return out;
         });
 
-    if (result.count < 50) {
+    if (result.count < 1000) {
       LOG(WARNING) << "配准失败：匹配点数不足（" << result.count << ")";
       return false;
     }
