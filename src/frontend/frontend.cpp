@@ -218,14 +218,33 @@ void Frontend::tryLoopClosure() {
   }
 }
 
-void Frontend::saveMap(const std::string& filename) const {
-  auto cloud = map_->getCloud();
-  if (cloud->empty()) {
-    LOG(WARNING) << "地图为空，无法保存";
-    return;
+void Frontend::saveMap(const std::string& save_dir) {
+  map_->clearAll();
+  const auto& kfs = backend_->getKeyFrames();
+
+  for (size_t i = 0; i < kfs.size(); ++i) {
+    const auto& kf = kfs[i];
+    std::string kf_path = save_dir + "kf_" + std::to_string(kf.id) + ".pcd";
+
+    CloudPtr cloud(new PointCloudType());
+    if (pcl::io::loadPCDFile<PointType>(kf_path, *cloud) == -1) {
+      continue;  // 文件不存在则跳过
+    }
+
+    M4f T = M4f::Identity();
+    T.block<3, 3>(0, 0) = kf.q.toRotationMatrix().cast<float>();
+    T.block<3, 1>(0, 3) = kf.p.cast<float>();
+
+    CloudPtr world_cloud(new PointCloudType());
+    pcl::transformPointCloud(*cloud, *world_cloud, T);
+
+    map_->addCloud(world_cloud);
   }
-  pcl::io::savePCDFileBinary(filename, *cloud);
-  LOG(INFO) << "地图保存完成：" << filename << ",  点数：" << cloud->size();
+
+  CloudPtr all = map_->getCloud();
+  std::string map_path = save_dir + "all_map.pcd";
+  pcl::io::savePCDFileBinary(map_path, *all);
+  LOG(INFO) << "地图保存完成: " << map_path << ", 点数: " << all->size();
 }
 
 void Frontend::resetESKFWithOptimizedPose(const State& state) {

@@ -101,14 +101,13 @@ bool Backend::addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen
                             << ", 剩余云: " << (cloud_count - freed);
   }
 
-  // 第二级：KF 总数超限时淘汰最老的（此时云大概率已释放）
+  // 第二级：KF 总数超限时淘汰最老的
   if (static_cast<int>(keyframes_.size()) > max_keyframes_) {
     int removed = 0;
     while (static_cast<int>(keyframes_.size()) > max_keyframes_) {
       keyframes_.pop_front();
       removed++;
     }
-    // 重新编号
     for (size_t i = 0; i < keyframes_.size(); ++i) {
       keyframes_[i].id = static_cast<int>(i);
     }

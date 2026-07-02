@@ -123,7 +123,7 @@ int main(int argc, char** argv) {
     LOG(ERROR) << "程序异常终止: " << e.what();
   }
 
-  frontend->saveMap(config.save_map_path + "all_map.pcd");
+  frontend->saveMap(config.save_map_path);
   LOG(INFO) << "关键帧数: " << frontend->getKeyframes().size();
   LOG(INFO) << "最终位姿: " << frontend->getState().p.transpose();
 

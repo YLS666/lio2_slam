@@ -75,7 +75,7 @@ class Frontend {
   Eigen::Matrix<double, 9, 9> getCovariance() const { return eskf_->getCovariance(); }
 
   /** @brief 保存地图 */
-  void saveMap(const std::string& filename) const;
+  void saveMap(const std::string& save_dir);
 
   /** @brief 获取后端关键帧 */
   const std::deque<KeyFrame>& getKeyframes() const { return backend_->getKeyFrames(); }
