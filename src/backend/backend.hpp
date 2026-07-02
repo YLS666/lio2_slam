@@ -40,6 +40,10 @@ class Backend {
   /** @brief 设置滑动窗口大小 */
   void setWindowSize(int n) { window_size_ = n; }
 
+  /** @brief 设置最大关键帧数（位姿骨架）和最大保留点云的关键帧数 */
+  void setMaxKeyFrames(int n) { max_keyframes_ = n; }
+  void setMaxKfClouds(int n) { max_kf_clouds_ = n; }
+
   /**
    * @brief 判断是否创建新关键帧, 如果是则添加到后端
    *
@@ -57,8 +61,11 @@ class Backend {
    *   - 第1帧固定 (边缘化约束)
    *   - 其余帧的位姿优化
    *   - 使用帧间相对约束作为测量
+   *
+   * @return true  优化成功
+   * @return false 优化异常，已自动回滚窗口内 KF 位姿
    */
-  void slideWindowOptimize();
+  bool slideWindowOptimize();
 
   void globalOptimize(const std::vector<LoopPair>& loop_pairs);
 
@@ -93,6 +100,9 @@ class Backend {
   double keyframe_min_interval_ = 0.5;  ///< 关键帧最小间隔阈值 s
 
   int window_size_ = 20;  ///< 滑动窗口大小
+
+  int max_keyframes_ = 5000;  ///< 最大关键帧数（位姿骨架 ~300B/帧，内存友好）
+  int max_kf_clouds_ = 300;   ///< 最多保留点云的关键帧数（~64KB/帧）
 
   double last_keyframe_timestamp_ = -1.0;  ///< 上一个关键帧时间戳
 };

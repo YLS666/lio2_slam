@@ -33,7 +33,7 @@ void Frontend::predict(const V3d gyr, const V3d acc, double dt, double g_norm) {
   state_.timestamp += dt;
 }
 
-State Frontend::process(const CloudPtr& cloud) {
+State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
   // 初始化
   if (!initialized_) {
     CloudPtr init_cloud(new PointCloudType);
@@ -85,7 +85,8 @@ State Frontend::process(const CloudPtr& cloud) {
   Eigen::Matrix<double, 6, 6> cov = reg_->getCovariance();
   if (cov.norm() > 1e-10 && cov.norm() < 1e10) {
     Eigen::Matrix<double, 6, 6> cov_reg = cov;
-    cov_reg.diagonal() += Eigen::Matrix<double, 6, 1>::Constant(1e-3);
+    constexpr double COV_INFLATION = 1e-2;  // 统一加 1e-2, info 特征值 ≤100, det ≤ 1e12
+    cov_reg.diagonal() += Eigen::Matrix<double, 6, 1>::Constant(COV_INFLATION);
     cov_reg = (cov_reg + cov_reg.transpose()) / 2.0;
     Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 6, 6>> eig(cov_reg);
     auto eigenvalues = eig.eigenvalues();
@@ -103,36 +104,46 @@ State Frontend::process(const CloudPtr& cloud) {
   bool is_keyframe = backend_->addKeyFrame(state_, feature_cloud, info_mat);
 
   if (is_keyframe) {
-    // 6.1: 滑动窗口优化
-    backend_->slideWindowOptimize();
-
-    // 获取优化后的最新关键帧位姿（用于 ESKF 重置）
-    const auto& kfs = backend_->getKeyFrames();
-    if (!kfs.empty()) {
-      const auto& last_kf = kfs.back();
-      double pos_diff = (last_kf.p - state_.p).norm();
-      double angle_diff = 2.0 * std::acos(std::min(1.0, std::abs((state_.q.inverse() * last_kf.q).w())));
-
-      if (pos_diff < 0.5 && angle_diff < 0.2) {
-        // 用滑窗优化后的位姿更新当前 state_
-        state_.p = last_kf.p;
-        state_.q = last_kf.q;
-
-        // 重置 ESKF：以优化后位姿为新起点
-        // 下次 propagateFromTrustedPose 会从此起点重新递推
-        resetESKFWithOptimizedPose(state_);
-
-        LOG(INFO) << "滑窗优化更新位姿，ESKF 已重置: dp=" << pos_diff << "m, dθ=" << angle_diff << "rad";
-      } else {
-        LOG(WARNING) << "滑窗优化结果异常，拒绝更新: dp=" << pos_diff << "m, dθ=" << angle_diff << "rad";
-      }
+    // 保存关键帧点云
+    if (!kf_save_dir.empty()) {
+      const auto& kfs = backend_->getKeyFrames();
+      std::string kf_path = kf_save_dir + "kf_" + std::to_string(kfs.back().id) + ".pcd";
+      pcl::io::savePCDFileBinary(kf_path, *feature_cloud);
+      LOG(INFO) << "保存关键帧点云: " << kf_path;
     }
 
-    // 6.2: 回环检测
-    tryLoopClosure();
+    int kf_count = backend_->getKeyframeCount();
 
-    // 7: 合并已优化的关键帧到地图（延迟插入）
-    mergeOptimizedKeyframesToMap();
+    if (kf_count < 3) {
+      // KF 数不足，跳过优化，直接用原始配准位姿合并到地图
+      LOG(INFO) << "[KF] kf_count=" << kf_count << " (<3)，累积关键帧，暂不优化";
+      mergeOptimizedKeyframesToMap();
+    } else {
+      // KF 数足够，运行滑动窗口优化
+      bool opt_ok = backend_->slideWindowOptimize();
+
+      if (opt_ok) {
+        const auto& kfs = backend_->getKeyFrames();
+        if (!kfs.empty()) {
+          const auto& last_kf = kfs.back();
+          double pos_diff = (last_kf.p - state_.p).norm();
+          double angle_diff = 2.0 * std::acos(std::min(1.0, std::abs((state_.q.inverse() * last_kf.q).w())));
+
+          if (pos_diff < 0.5 && angle_diff < 0.2) {
+            state_.p = last_kf.p;
+            state_.q = last_kf.q;
+            resetESKFWithOptimizedPose(state_);
+            LOG(INFO) << "滑窗优化更新位姿，ESKF 已重置: dp=" << pos_diff << "m, dθ=" << angle_diff << "rad";
+          } else {
+            LOG(WARNING) << "滑窗优化结果偏离过大，拒绝更新: dp=" << pos_diff << "m, dθ=" << angle_diff << "rad";
+          }
+        }
+
+        tryLoopClosure();
+        mergeOptimizedKeyframesToMap();
+      }
+      // opt_ok == false：优化已在 slideWindowOptimize 内部回滚，跳过合并
+    }
   }
 
   // 8: 更新地图局部中心
@@ -218,17 +229,28 @@ void Frontend::saveMap(const std::string& filename) const {
 }
 
 void Frontend::resetESKFWithOptimizedPose(const State& state) {
-  // 将 ESKF 的名义状态重置为优化后的可靠位姿
-  eskf_->setState(state.q, state.p, state.v, state.timestamp);
+  // 用优化后轨迹的相邻 KF 位姿差分估算速度，替代直接继承 ESKF 累积速度
+  V3d v_est = V3d::Zero();
+  const auto& kfs = backend_->getKeyFrames();
+  if (kfs.size() >= 2) {
+    const auto& prev_kf = kfs[kfs.size() - 2];
+    double dt = state.timestamp - prev_kf.timestamp;
+    if (dt > 0.01) {
+      v_est = (state.p - prev_kf.p) / dt;
+    }
+  }
 
-  // 重置协方差：给旋转和平移小幅不确定性，速度较大不确定性
+  eskf_->setState(state.q, state.p, v_est, state.timestamp);
+
+  // 重置协方差：旋转/平移从一个合理先验出发，速度给较大不确定性
   Eigen::Matrix<double, 9, 9> P_new = Eigen::Matrix<double, 9, 9>::Identity();
   P_new.block<3, 3>(0, 0) *= 0.01;  // 旋转: 0.01 rad² (~5.7°)
   P_new.block<3, 3>(3, 3) *= 0.05;  // 平移: 0.05 m² (~22cm)
-  P_new.block<3, 3>(6, 6) *= 0.5;   // 速度: 0.5 (m/s)²
+  P_new.block<3, 3>(6, 6) *= 1.0;   // 速度: 1.0 (m/s)²（差分估算，不确定性应设大）
   eskf_->setCovariance(P_new);
 
-  LOG(INFO) << "[ESKF Reset] 用优化后位姿重置: p=" << state.p.transpose() << " q=" << state.q.coeffs().transpose();
+  LOG(INFO) << "[ESKF Reset] p=" << state.p.transpose() << " v_est=" << v_est.transpose()
+            << " q=" << state.q.coeffs().transpose();
 }
 
 void Frontend::mergeOptimizedKeyframesToMap() {
@@ -325,9 +347,13 @@ void Frontend::propagateFromTrustedPose(const std::vector<ImuState>& imu_states,
   // 找到相对于 cloud_time 的最近 IMU 帧
   // 从 state_ 的时间戳到 cloud_time 之间的 IMU 数据
   double start_time = state_.timestamp;
+  // timestamp 异常（被意外归零）时跳过递推，避免重放全部 IMU 史导致漂移
+  if (start_time <= 0.0) {
+    LOG(ERROR) << "[IMU Propagate] state_.timestamp 异常(" << start_time
+               << "), 跳过递推, state_.p=" << state_.p.transpose();
+    return;
+  }
 
-  int propagate_count = 0;
-  constexpr int MAX_PROPAGATE_STATES = 50;  // 最多处理50个状态对
   for (size_t i = 0; i < imu_states.size() - 1; ++i) {
     const auto& s1 = imu_states[i];
     const auto& s2 = imu_states[i + 1];
@@ -338,11 +364,6 @@ void Frontend::propagateFromTrustedPose(const std::vector<ImuState>& imu_states,
     }
     if (s1.timestamp > cloud_time) {
       break;
-    }
-
-    if (++propagate_count > MAX_PROPAGATE_STATES) {
-      LOG(WARNING) << "[IMU Propagate] 处理状态过多(" << propagate_count << ")，可能时间戳异常，强制截断";
-      break;  // 跳过后续 IMU 数据
     }
 
     double dt = s2.timestamp - s1.timestamp;
@@ -356,14 +377,21 @@ void Frontend::propagateFromTrustedPose(const std::vector<ImuState>& imu_states,
 
     // 从原始 IMU 消息中按时间戳匹配提取加速度
     V3d acc_body = V3d::Zero();
+    bool acc_found = false;
     for (const auto& imu_msg : imu_datas) {
       double msg_time = imu_msg.header.stamp.sec + imu_msg.header.stamp.nanosec * 1e-9;
       if (std::abs(msg_time - s1.timestamp) < 0.005) {  // 5ms 内匹配
         acc_body << imu_msg.linear_acceleration.x, imu_msg.linear_acceleration.y, imu_msg.linear_acceleration.z;
         acc_body *= g_norm;  // g → m/s²
         acc_body -= s1.ba;   // 减去加速度计 bias
+        acc_found = true;
         break;
       }
+    }
+
+    // 没有匹配到加速度数据，跳过该状态对，避免自由落体积分
+    if (!acc_found) {
+      continue;
     }
 
     eskf_->predict(gyr, acc_body, dt, g_norm);

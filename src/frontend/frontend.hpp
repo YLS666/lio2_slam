@@ -31,6 +31,10 @@ class Frontend {
     backend_->setKeyframeAngle(angle_thresh);
   }
 
+  /** @brief 设置最大关键帧数及保留点云的最大帧数 */
+  void setMaxKeyFrames(int n) { backend_->setMaxKeyFrames(n); }
+  void setMaxKfClouds(int n) { backend_->setMaxKfClouds(n); }
+
   /** @brief 初始化 (设置初始位姿) */
   void init(const State& init_state);
 
@@ -51,9 +55,10 @@ class Frontend {
    * @brief 配准 + 观测更新 (每帧点云数据调用)
    *
    * @param cloud  去畸变后的点云
+   * @param kf_save_dir 保存关键帧点云的目录
    * @return State 校正后的状态
    */
-  State process(const CloudPtr& cloud);
+  State process(const CloudPtr& cloud, const std::string& kf_save_dir = "");
 
   /**
    * @brief 特征点云采样 (用于关键帧)

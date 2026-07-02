@@ -69,8 +69,9 @@ class ESKF {
    * @param v  优化后的速度
    * @param P_reset  重置后的协方差（可选，默认小值）
    */
-  void resetWithPose(const Qd& q, const V3d& p, const V3d& v,
-                     const Eigen::Matrix<double, 9, 9>& P_reset = Eigen::Matrix<double, 9, 9>::Identity());
+  // void resetWithPose(const Qd& q, const V3d& p, const V3d& v,
+  //                    const Eigen::Matrix<double, 9, 9>& P_reset = Eigen::Matrix<double, 9, 9>::Identity(),
+  //                    double timestamp = 0.0);
 
   /**
    * @brief 获取校正后的名义状态

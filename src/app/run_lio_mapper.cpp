@@ -49,6 +49,8 @@ int main(int argc, char** argv) {
   frontend->setKeyframeParams(0.5,  // 关键帧距离阈值 (米)
                               0.35  // 关键帧角度阈值 (rad, ~20°)
   );
+  frontend->setMaxKeyFrames(5000);  // 位姿骨架全保留（~1.5MB）
+  frontend->setMaxKfClouds(300);    // 只保留最近 300 帧点云（~19MB）
 
   LOG(INFO) << "前端模块初始化完成";
 
@@ -58,7 +60,6 @@ int main(int argc, char** argv) {
 
   LOG(INFO) << "开始处理 bag: " << config.bag_file;
 
-  int count = 0;
   try {
     bag.run(
         [&](const sensor_msgs::msg::Imu& imu_msg) {
@@ -97,17 +98,16 @@ int main(int argc, char** argv) {
               continue;
             }
 
-            std::string map_path = config.save_map_path + "frame_" + std::to_string(count++) + ".pcd";
-            pcl::io::savePCDFileBinary(map_path, *deskew_cloud);
-            LOG(INFO) << "保存关键帧地图: " << map_path;
-
             // 短期 IMU 递推
             const auto& imu_queue = imu_processor.getStates();
             std::vector<ImuState> imu_vec(imu_queue.begin(), imu_queue.end());
             double cloud_time = measures.lidar_end_time;
             frontend->propagateFromTrustedPose(imu_vec, measures.imu_datas, cloud_time, config.g_norm);
 
-            frontend->process(deskew_cloud);
+            frontend->process(deskew_cloud, config.save_map_path);
+
+            LOG(INFO) << "[TRAJ] " << std::fixed << std::setprecision(6) << measures.lidar_end_time << " "
+                      << frontend->getState().p.transpose() << " " << frontend->getState().q.coeffs().transpose();
 
             // 检测系统是否发散
             if (frontend->isDiverged()) {
