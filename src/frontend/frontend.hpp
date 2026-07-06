@@ -31,6 +31,10 @@ class Frontend {
     backend_->setKeyframeAngle(angle_thresh);
   }
 
+  void setImuBiasNoise(double gyr_bias_noise, double acc_bias_noise) {
+    eskf_->setImuNoise(eskf_->getGyrNoise(), eskf_->getAccNoise(), gyr_bias_noise, acc_bias_noise);
+  }
+
   /** @brief 设置最大关键帧数及保留点云的最大帧数 */
   void setMaxKeyFrames(int n) { backend_->setMaxKeyFrames(n); }
   void setMaxKfClouds(int n) { backend_->setMaxKfClouds(n); }

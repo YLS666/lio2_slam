@@ -59,9 +59,9 @@ void CloudProcessor::pre_process(const sensor_msgs::msg::PointCloud2::SharedPtr&
       }
 
       // 过滤雷达高度以下的点
-      if (new_pt.z < 0) {
-        continue;
-      }
+      // if (new_pt.z < 0) {
+      //   continue;
+      // }
 
       // 略掉过近的点
       if (new_pt.getVector3fMap().norm() < 0.5) {

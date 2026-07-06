@@ -46,8 +46,10 @@ int main(int argc, char** argv) {
                           0.05,    // 角度观测噪声 (rad, ~2.86°)
                           0.1      // 位置观测噪声 (m)
   );
-  frontend->setKeyframeParams(0.5,  // 关键帧距离阈值 (米)
-                              0.35  // 关键帧角度阈值 (rad, ~20°)
+  frontend->setImuBiasNoise(1.0e-5,   // 陀螺仪 bias 随机游走 rad/s/√Hz (很小)
+                            5.0e-5);  // 加速度计 bias 随机游走 m/s²/√Hz
+  frontend->setKeyframeParams(0.5,    // 关键帧距离阈值 (米)
+                              0.35    // 关键帧角度阈值 (rad, ~20°)
   );
   frontend->setMaxKeyFrames(5000);  // 位姿骨架全保留（~1.5MB）
   frontend->setMaxKfClouds(300);    // 只保留最近 300 帧点云（~19MB）

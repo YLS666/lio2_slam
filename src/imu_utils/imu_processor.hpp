@@ -65,4 +65,5 @@ class ImuProcessor {
   V3d last_gyr_;
   V3d last_acc_;
   bool has_last_imu_ = false;
+  double last_valid_timestamp_ = 0.0;  // 最后一次合法 IMU 的时间戳
 };

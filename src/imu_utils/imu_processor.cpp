@@ -157,12 +157,26 @@ bool ImuProcessor::processImu(const sensor_msgs::msg::Imu& imu) {
 
   // 时间合法性检查
   const ImuState& last = states_.back();
-  double dt = t - last.timestamp;  // 计算当前帧imu数据与上一帧imu数据的时间差
+  double dt = t - last.timestamp;
 
   if (dt <= 0.0 || dt > 0.1) {
-    LOG(WARNING) << "imu数据时间差不合法,丢弃当前帧数据！ dt = " << dt;
+    // 如果跟 last_valid 的差在合理范围，用 last_valid 覆盖 states_.back() 的时间基准
+    if (last_valid_timestamp_ > 0.0) {
+      double dt2 = t - last_valid_timestamp_;
+      if (dt2 > 0.0 && dt2 <= 0.1) {
+        ImuState hack = states_.back();
+        hack.timestamp = last_valid_timestamp_;
+        states_.back() = hack;
+        LOG(WARNING) << "imu数据时间差修复 dt=" << dt << " → dt=" << t - states_.back().timestamp;
+        return false;  // 下一帧会正常通过
+      }
+    }
+    LOG(WARNING) << "imu数据时间差不合法 dt=" << dt << "，丢弃";
+    last_valid_timestamp_ = t;
     return false;
   }
+
+  last_valid_timestamp_ = t;
 
   // 去除ba和bg
   gyr -= bg_;
