@@ -163,7 +163,7 @@ void PangolinViewer::run() {
   try {
     constexpr int kWindowWidth = 1920;
     constexpr int kWindowHeight = 1080;
-    const int view_w = static_cast<int>(kWindowWidth * 0.75f);
+    const int view_w = static_cast<int>(kWindowWidth * 0.75f);  // 3D View 占窗口宽度的 75%
     const int view_h = kWindowHeight;
 
     // ---------- 初始化 Pangolin ----------

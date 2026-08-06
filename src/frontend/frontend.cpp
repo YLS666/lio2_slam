@@ -7,7 +7,8 @@
 #include <filesystem>
 #include "cloud_utils/point_type.hpp"
 
-Frontend::Frontend() : last_feature_cloud_(new pcl::PointCloud<PointType>()) {
+Frontend::Frontend(AllConfig config)
+    : is_use_viewer_(config.is_use_imu), last_feature_cloud_(new pcl::PointCloud<PointType>()) {
   map_ = std::make_unique<VoxelMap>(0.2f, 20.0f, 2);
   reg_ = std::make_unique<Registration>();
   eskf_ = std::make_unique<ESKF>();

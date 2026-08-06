@@ -4,6 +4,7 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include "backend/backend.hpp"
 #include "cloud_utils/point_type.hpp"
+#include "config_def.hpp"
 #include "estimator/eskf.hpp"
 #include "frontend/registration.hpp"
 #include "frontend/state.hpp"
@@ -14,7 +15,8 @@
 
 class Frontend {
  public:
-  Frontend();
+  explicit Frontend(AllConfig config);
+
   /** @brief 设置基础地图参数 (转发给 VoxelMap) */
   void setMapParams(float voxel_size, float block_size, int block_radius) {
     map_ = std::make_unique<VoxelMap>(voxel_size, block_size, block_radius);

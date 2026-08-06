@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
   ImuProcessor imu_processor(config);
   CloudProcessor cloud_processor(config);
 
-  auto frontend = std::make_shared<Frontend>();
+  auto frontend = std::make_shared<Frontend>(config);
   frontend->setESKFParams(1.7e-4,  // 陀螺仪噪声密度
                           2.0e-3,  // 加速度计噪声密度
                           0.05,    // 角度观测噪声 (rad, ~2.86°)

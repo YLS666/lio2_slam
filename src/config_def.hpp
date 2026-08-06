@@ -19,6 +19,7 @@ class AllConfig {
   std::vector<double> t_imu_lidar;
   std::vector<double> r_imu_lidar;
   double g_norm;
+  bool is_use_imu;
 
   bool init(std::string config_file_path) {
     try {
@@ -72,6 +73,11 @@ class AllConfig {
         return false;
       }
       g_norm = config["g_norm"].as<double>();
+
+      if (!config["is_use_imu"]) {
+        return false;
+      }
+      is_use_imu = config["is_use_imu"].as<bool>();
 
       return true;
     } catch (const YAML::Exception& e) {
