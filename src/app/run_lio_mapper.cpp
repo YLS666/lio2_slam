@@ -53,6 +53,7 @@ int main(int argc, char** argv) {
   );
   frontend->setMaxKeyFrames(5000);  // 位姿骨架全保留（~1.5MB）
   frontend->setMaxKfClouds(300);    // 只保留最近 300 帧点云（~19MB）
+  frontend->initViewer();           // 显式启动 viewer（frontend::init 里也会自动启动）
 
   LOG(INFO) << "前端模块初始化完成";
 
@@ -128,6 +129,8 @@ int main(int argc, char** argv) {
   frontend->saveMap(config.save_map_path);
   LOG(INFO) << "关键帧数: " << frontend->getKeyframes().size();
   LOG(INFO) << "最终位姿: " << frontend->getState().p.transpose();
+
+  frontend->stopViewer();
 
   google::ShutdownGoogleLogging();
   return 0;

@@ -10,6 +10,7 @@
 #include "frontend/voxel_map.hpp"
 #include "imu_utils/imu_processor.hpp"
 #include "loop_closure/loop_closure.hpp"
+#include "visualization/pangolin_viewer.hpp"
 
 class Frontend {
  public:
@@ -102,6 +103,16 @@ class Frontend {
   void propagateFromTrustedPose(const std::vector<ImuState>& imu_states,
                                 const std::deque<sensor_msgs::msg::Imu>& imu_datas, double cloud_time, double g_norm);
 
+  /** @brief 初始化并启动 Pangolin 可视化 */
+  void initViewer();
+
+  /** @brief 停止可视化 */
+  void stopViewer() {
+    if (viewer_) {
+      viewer_->stop();
+    }
+  }
+
  private:
   // 核心组件
   std::unique_ptr<VoxelMap> map_;
@@ -109,6 +120,9 @@ class Frontend {
   std::unique_ptr<ESKF> eskf_;
   std::unique_ptr<Backend> backend_;
   std::unique_ptr<LoopClosure> loop_closure_;
+  // 可视化
+  std::unique_ptr<PangolinViewer> viewer_;
+  bool is_use_viewer_ = true;
 
   // 状态
   State state_;

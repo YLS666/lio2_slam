@@ -4,6 +4,8 @@
 #include <pcl/common/transforms.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/io/pcd_io.h>
+#include <filesystem>
+#include "cloud_utils/point_type.hpp"
 
 Frontend::Frontend() : last_feature_cloud_(new pcl::PointCloud<PointType>()) {
   map_ = std::make_unique<VoxelMap>(0.2f, 20.0f, 2);
@@ -12,6 +14,7 @@ Frontend::Frontend() : last_feature_cloud_(new pcl::PointCloud<PointType>()) {
   backend_ = std::make_unique<Backend>();
   loop_closure_ = std::make_unique<LoopClosure>();
   loop_closure_->setKeyframesPtr(&backend_->getKeyFrames());
+  viewer_ = std::make_unique<PangolinViewer>();
 }
 
 void Frontend::init(const State& init_state) {
@@ -37,10 +40,8 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
   // 初始化
   if (!initialized_) {
     CloudPtr init_cloud(new PointCloudType);
-    static pcl::VoxelGrid<PointType> voxel_init;
-    voxel_init.setInputCloud(cloud);
-    voxel_init.setLeafSize(0.2f, 0.2f, 0.2f);
-    voxel_init.filter(*init_cloud);
+    init_cloud = dsCloud(cloud, 0.2f);  // 降采样后作为初始地图
+
     map_->addCloud(init_cloud);
     map_->setLocalCenter(state_.p);
     initialized_ = true;
@@ -52,10 +53,7 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
 
   // 1: 降采样特征
   CloudPtr ds_cloud(new PointCloudType);
-  static pcl::VoxelGrid<PointType> voxel;
-  voxel.setInputCloud(cloud);
-  voxel.setLeafSize(0.1f, 0.1f, 0.1f);
-  voxel.filter(*ds_cloud);
+  ds_cloud = dsCloud(cloud, 0.1f);
 
   auto feature_cloud = featureSample(ds_cloud);
 
@@ -106,6 +104,11 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
   if (is_keyframe) {
     // 保存关键帧点云
     if (!kf_save_dir.empty()) {
+      if (!std::filesystem::exists(kf_save_dir)) {
+        LOG(ERROR) << "日志目录不存在: " << kf_save_dir;
+        std::filesystem::create_directories(kf_save_dir);
+      }
+
       const auto& kfs = backend_->getKeyFrames();
       std::string kf_path = kf_save_dir + "kf_" + std::to_string(kfs.back().id) + ".pcd";
       pcl::io::savePCDFileBinary(kf_path, *feature_cloud);
@@ -151,6 +154,37 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
 
   // 保存特征云 (用于回环)
   last_feature_cloud_ = feature_cloud;
+
+  // ---- 可视化更新 ----
+  if (is_use_viewer_ && viewer_ && viewer_->isRunning()) {
+    // 当前帧去畸变点云 → 用当前位姿变换到世界坐标
+    CloudPtr world_current_cloud(new PointCloudType());
+    M4f T_cur = M4f::Identity();
+    T_cur.block<3, 3>(0, 0) = state_.q.toRotationMatrix().cast<float>();
+    T_cur.block<3, 1>(0, 3) = state_.p.cast<float>();
+    pcl::transformPointCloud(*cloud, *world_current_cloud, T_cur);
+    viewer_->updateCurrentCloud(world_current_cloud);
+
+    // 局部地图
+    auto local_map_cloud = map_->getCloud();
+    CloudPtr ds_local_map(new PointCloudType());
+    ds_local_map = dsCloud(local_map_cloud, 1.0f);  // 降采样后传给 viewer
+    viewer_->updateLocalMap(ds_local_map);
+
+    // 全局地图（增量：去畸变点云用当前位姿投影到世界坐标）
+    CloudPtr world_cloud(new PointCloudType());
+    M4f T_world = M4f::Identity();
+    T_world.block<3, 3>(0, 0) = state_.q.toRotationMatrix().cast<float>();
+    T_world.block<3, 1>(0, 3) = state_.p.cast<float>();
+    pcl::transformPointCloud(*cloud, *world_cloud, T_world);
+    viewer_->appendGlobalMap(world_cloud);
+
+    // 位姿轨迹
+    viewer_->updatePose(state_.p, state_.q, state_.timestamp);
+
+    // 速度/加速度（从 ESKF 获取速度，从 IMU 消息获取角速度）
+    viewer_->updateMotionInfo(state_.v, V3d::Zero(), V3d::Zero());
+  }
 
   return state_;
 }
@@ -335,13 +369,10 @@ void Frontend::rebuildMapFromKeyframes() {
     pcl::transformPointCloud(*kf.cloud, *world_cloud, T);
 
     // 降采样避免过密
-    static pcl::VoxelGrid<PointType> voxel_rebuild;
-    voxel_rebuild.setInputCloud(world_cloud);
-    voxel_rebuild.setLeafSize(0.1f, 0.1f, 0.1f);
-    CloudPtr ds(new PointCloudType());
-    voxel_rebuild.filter(*ds);
+    CloudPtr ds_world_cloud(new PointCloudType());
+    ds_world_cloud = dsCloud(world_cloud, 0.1f);  // 降采样后传给地图
 
-    map_->addCloud(ds);
+    map_->addCloud(ds_world_cloud);
   }
 
   // 重建后标记所有关键帧为已合并，后续新帧可以继续正常合并
@@ -350,6 +381,14 @@ void Frontend::rebuildMapFromKeyframes() {
   }
 
   LOG(INFO) << "[MapRebuild] 回环后地图重建完成, 点数: " << map_->size();
+
+  // 重建后更新全局地图给 viewer
+  if (is_use_viewer_ && viewer_ && viewer_->isRunning()) {
+    viewer_->clearGlobalMap();
+    // 用重建后的地图填充全局地图
+    auto rebuilt_cloud = map_->getCloud();
+    viewer_->appendGlobalMap(rebuilt_cloud);
+  }
 }
 
 void Frontend::propagateFromTrustedPose(const std::vector<ImuState>& imu_states,
@@ -421,4 +460,10 @@ void Frontend::propagateFromTrustedPose(const std::vector<ImuState>& imu_states,
   state_.timestamp = cloud_time;
 
   VLOG(1) << "[IMU Propagate] 短期递推 " << imu_states.size() << " 帧, pred_p=" << state_.p.transpose();
+}
+
+void Frontend::initViewer() {
+  if (is_use_viewer_ && viewer_ && !viewer_->isRunning()) {
+    viewer_->start();
+  }
 }

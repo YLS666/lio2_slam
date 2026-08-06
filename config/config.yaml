@@ -1,6 +1,6 @@
 bag_file: /home/yls/data/slam_tools/bag/changfang/rosbag2_2026_05_07-16_30_57/
 
-save_map_path: /home/yls/data/slam_tools/map/map_0/
+save_map_path: /home/yls/data/slam_tools/map/map_0/test/
 
 imu_topic: /ns1/livox/imu_192_168_8_122
 
