@@ -1,5 +1,4 @@
 #include "frontend/frontend.hpp"
-#include <Eigen/src/Core/Matrix.h>
 #include <glog/logging.h>
 #include <pcl/common/transforms.h>
 #include <pcl/filters/voxel_grid.h>
@@ -9,40 +8,52 @@
 
 Frontend::Frontend(AllConfig config)
     : is_use_viewer_(config.is_use_imu), last_feature_cloud_(new pcl::PointCloud<PointType>()) {
-  map_ = std::make_unique<VoxelMap>(0.2f, 20.0f, 2);
-  reg_ = std::make_unique<Registration>();
-  eskf_ = std::make_unique<ESKF>();
+  // 体素地图
+  map_ = std::make_unique<VoxelMap>(0.5f, 20.0f, 4);
+
+  // NDT 配准 (设为 IEKF 回调模式)
+  reg_ = std::make_unique<NDTRegistration>(5);
+  reg_->setHuber(false, 0.0);      // NDT 不需要 Huber
+  reg_->setInfoRatio(0.01);        // 信息矩阵缩放 100 倍
+  reg_->setOutlierThreshold(5.0);  // 马氏距离阈值
+
+  // 18-DOF IESKF (替代旧 9-DOF ESKF)
+  IESKF::Options ieskf_opt;
+  ieskf_opt.num_iterations_ = 3;  // IEKF 迭代次数
+  ieskf_opt.gyr_noise_ = 1.7e-4;  // 陀螺仪白噪声
+  ieskf_opt.acc_noise_ = 2.0e-3;  // 加速度计白噪声
+  ieskf_opt.bg_noise_ = 1e10;     // bg 随机游走: 极大 = 不更新 (已由 ImuProcessor 标定)
+  ieskf_opt.ba_noise_ = 1e10;     // ba 随机游走: 极大 = 不更新
+  ieskf_opt.update_bg_ = false;   // bg 不更新 (ImuProcessor 已处理)
+  ieskf_opt.update_ba_ = false;   // ba 不更新
+  // 注意: g_ (重力向量) 总是会被更新, 这是修复 Z 轴漂移的关键
+  ieskf_ = std::make_unique<IESKF>(ieskf_opt);
+
+  // 后端 & 回环
   backend_ = std::make_unique<Backend>();
   loop_closure_ = std::make_unique<LoopClosure>();
   loop_closure_->setKeyframesPtr(&backend_->getKeyFrames());
+
+  // 可视化
   viewer_ = std::make_unique<PangolinViewer>();
 }
 
 void Frontend::init(const State& init_state) {
   state_ = init_state;
-  eskf_->setState(init_state.q, init_state.p, init_state.v, init_state.timestamp);
-}
+  // 设置 IESKF 全量状态 (含 bg, ba, g)
+  ieskf_->setState(init_state.q, init_state.p, init_state.v, init_state.bg, init_state.ba, init_state.g,
+                   init_state.timestamp);
 
-void Frontend::predict(const V3d gyr, const V3d acc, double dt, double g_norm) {
-  if (!initialized_) {
-    return;
-  }
-
-  // ESKF 前向传播
-  eskf_->predict(gyr, acc, dt, g_norm);
-
-  // 更新状态 (用于 map 的局部中心)
-  state_ = eskf_->getNominalState();
-
-  state_.timestamp += dt;
+  // 初始化协方差
+  Eigen::Matrix<double, 18, 18> P_init = Eigen::Matrix<double, 18, 18>::Identity() * 1e-4;
+  P_init.block<3, 3>(6, 6) = M3d::Identity() * 0.1;  // 旋转不确定度
+  ieskf_->setCovariance(P_init);
 }
 
 State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
   // 初始化
   if (!initialized_) {
-    CloudPtr init_cloud(new PointCloudType);
-    init_cloud = dsCloud(cloud, 0.2f);  // 降采样后作为初始地图
-
+    CloudPtr init_cloud = dsCloud(cloud, 0.2f);
     map_->addCloud(init_cloud);
     map_->setLocalCenter(state_.p);
     initialized_ = true;
@@ -52,44 +63,57 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
 
   frame_count_++;
 
-  // 1: 降采样特征
-  CloudPtr ds_cloud(new PointCloudType);
-  ds_cloud = dsCloud(cloud, 0.1f);
-
+  // 1. 降采样 + 特征采样
+  CloudPtr ds_cloud = dsCloud(cloud, 0.1f);
   auto feature_cloud = featureSample(ds_cloud);
 
-  // 2: 配准 (使用 ESKF 预测作为初值)
-  State reg_init = state_;  // ESKF 预测值
-  bool reg_success = reg_->align(feature_cloud, map_.get(), reg_init);
+  // 2. IEKF + NDT 配准 (对齐 slam_tools 架构)
+  // NDT 作为 IEKF 的观测回调, 在每次 IEKF 迭代中重新线性化
+  //   - IMU 先验 (协方差 P) + NDT 观测 (HTVH/HTVr) 在每次迭代中同时起作用
+  //   - 不再先做独立 NDT 优化再喂给 ESKF
+  reg_->setSource(feature_cloud);
+  int effective_points = 0;
 
-  // 3: 配准失败处理
+  bool reg_success = ieskf_->updateUsingCustomObserve(
+      [this, &effective_points](const SE3& input_pose, Eigen::Matrix<double, 18, 18>& HTVH,
+                                Eigen::Matrix<double, 18, 1>& HTVr) -> int {
+        effective_points = reg_->computeResidualAndJacobians(map_.get(), input_pose, HTVH, HTVr);
+        return effective_points;
+      },
+      50);  // min_effective = 50
+
+  // 3. 配准失败处理
   if (!reg_success) {
-    LOG(ERROR) << "配准失败，系统发散! 停止递推，准备保存地图退出...";
+    LOG(ERROR) << "NDT+IEKF 配准失败! effective=" << effective_points;
     diverged_ = true;
     last_reg_success_ = false;
     return state_;
   }
   last_reg_success_ = true;
 
-  // 4: ESKF 观测更新
-  eskf_->observePose(reg_init.q, reg_init.p);
+  // 4. 获取更新后的全量状态
   double state_ts = state_.timestamp;
-  state_ = eskf_->getNominalState();
+  state_ = ieskf_->getNominalState();
   if (state_.timestamp == 0.0) {
-    state_.timestamp = state_ts;  // 重置时间戳
+    state_.timestamp = state_ts;
   }
 
-  // 5: 构建信息矩阵
+  LOG(INFO) << "[Process] p=" << state_.p.transpose() << " v=" << state_.v.transpose()
+            << " bg=" << state_.bg.transpose() << " ba=" << state_.ba.transpose() << " g=" << state_.g.transpose()
+            << " effective=" << effective_points;
+
+  // 5. 构建信息矩阵 (从 IESKF 位姿协方差提取 6×6 块)
   Eigen::Matrix<double, 6, 6> info_mat = Eigen::Matrix<double, 6, 6>::Identity();
-  Eigen::Matrix<double, 6, 6> cov = reg_->getCovariance();
-  if (cov.norm() > 1e-10 && cov.norm() < 1e10) {
-    Eigen::Matrix<double, 6, 6> cov_reg = cov;
-    constexpr double COV_INFLATION = 1e-2;  // 统一加 1e-2, info 特征值 ≤100, det ≤ 1e12
-    cov_reg.diagonal() += Eigen::Matrix<double, 6, 1>::Constant(COV_INFLATION);
-    cov_reg = (cov_reg + cov_reg.transpose()) / 2.0;
-    Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 6, 6>> eig(cov_reg);
+  {
+    Eigen::Matrix<double, 6, 6> pose_cov = ieskf_->getPoseCovariance();
+    // 正则化 + 求逆
+    pose_cov.diagonal() += Eigen::Matrix<double, 6, 1>::Constant(1e-3);
+    pose_cov = (pose_cov + pose_cov.transpose()) / 2.0;
+
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 6, 6>> eig(pose_cov);
     auto eigenvalues = eig.eigenvalues();
     auto eigenvectors = eig.eigenvectors();
+
     constexpr double MIN_EIGEN = 1e-8;
     Eigen::Matrix<double, 6, 1> inv_eigen;
     for (int i = 0; i < 6; ++i) {
@@ -99,17 +123,15 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
     info_mat = (info_mat + info_mat.transpose()) / 2.0;
   }
 
-  // 6: 后端关键帧管理 (先保存，不插入地图)
+  // 6. 后端关键帧管理
   bool is_keyframe = backend_->addKeyFrame(state_, feature_cloud, info_mat);
 
   if (is_keyframe) {
     // 保存关键帧点云
     if (!kf_save_dir.empty()) {
       if (!std::filesystem::exists(kf_save_dir)) {
-        LOG(ERROR) << "日志目录不存在: " << kf_save_dir;
         std::filesystem::create_directories(kf_save_dir);
       }
-
       const auto& kfs = backend_->getKeyFrames();
       std::string kf_path = kf_save_dir + "kf_" + std::to_string(kfs.back().id) + ".pcd";
       pcl::io::savePCDFileBinary(kf_path, *feature_cloud);
@@ -117,15 +139,11 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
     }
 
     int kf_count = backend_->getKeyframeCount();
-
     if (kf_count < 3) {
-      // KF 数不足，跳过优化，直接用原始配准位姿合并到地图
       LOG(INFO) << "[KF] kf_count=" << kf_count << " (<3)，累积关键帧，暂不优化";
       mergeOptimizedKeyframesToMap();
     } else {
-      // KF 数足够，运行滑动窗口优化
       bool opt_ok = backend_->slideWindowOptimize();
-
       if (opt_ok) {
         const auto& kfs = backend_->getKeyFrames();
         if (!kfs.empty()) {
@@ -137,28 +155,23 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
             state_.p = last_kf.p;
             state_.q = last_kf.q;
             resetESKFWithOptimizedPose(state_);
-            LOG(INFO) << "滑窗优化更新位姿，ESKF 已重置: dp=" << pos_diff << "m, dθ=" << angle_diff << "rad";
+            LOG(INFO) << "滑窗优化更新位姿，IESKF 已重置: dp=" << pos_diff << "m, dθ=" << angle_diff << "rad";
           } else {
             LOG(WARNING) << "滑窗优化结果偏离过大，拒绝更新: dp=" << pos_diff << "m, dθ=" << angle_diff << "rad";
           }
         }
-
-        tryLoopClosure();
         mergeOptimizedKeyframesToMap();
       }
-      // opt_ok == false：优化已在 slideWindowOptimize 内部回滚，跳过合并
     }
   }
 
-  // 8: 更新地图局部中心
+  // 7. 更新地图局部中心
   map_->setLocalCenter(state_.p);
 
-  // 保存特征云 (用于回环)
   last_feature_cloud_ = feature_cloud;
 
-  // ---- 可视化更新 ----
+  // 8. 可视化
   if (is_use_viewer_ && viewer_ && viewer_->isRunning()) {
-    // 当前帧去畸变点云 → 用当前位姿变换到世界坐标
     CloudPtr world_current_cloud(new PointCloudType());
     M4f T_cur = M4f::Identity();
     T_cur.block<3, 3>(0, 0) = state_.q.toRotationMatrix().cast<float>();
@@ -166,13 +179,10 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
     pcl::transformPointCloud(*cloud, *world_current_cloud, T_cur);
     viewer_->updateCurrentCloud(world_current_cloud);
 
-    // 局部地图
     auto local_map_cloud = map_->getCloud();
-    CloudPtr ds_local_map(new PointCloudType());
-    ds_local_map = dsCloud(local_map_cloud, 1.0f);  // 降采样后传给 viewer
+    CloudPtr ds_local_map = dsCloud(local_map_cloud, 1.0f);
     viewer_->updateLocalMap(ds_local_map);
 
-    // 全局地图（增量：去畸变点云用当前位姿投影到世界坐标）
     CloudPtr world_cloud(new PointCloudType());
     M4f T_world = M4f::Identity();
     T_world.block<3, 3>(0, 0) = state_.q.toRotationMatrix().cast<float>();
@@ -180,11 +190,8 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
     pcl::transformPointCloud(*cloud, *world_cloud, T_world);
     viewer_->appendGlobalMap(world_cloud);
 
-    // 位姿轨迹
     viewer_->updatePose(state_.p, state_.q, state_.timestamp);
-
-    // 速度/加速度（从 ESKF 获取速度，从 IMU 消息获取角速度）
-    viewer_->updateMotionInfo(state_.v, V3d::Zero(), V3d::Zero());
+    viewer_->updateMotionInfo(state_.v, state_.bg, state_.ba);
   }
 
   return state_;
@@ -199,7 +206,6 @@ CloudPtr Frontend::featureSample(const CloudPtr& cloud) const {
     VoxelKey key{static_cast<int>(std::floor(pt.x / VOXEL_SIZE)), static_cast<int>(std::floor(pt.y / VOXEL_SIZE)),
                  static_cast<int>(std::floor(pt.z / VOXEL_SIZE))};
 
-    // 每个 voxel 只保留一个点
     if (voxel_map.find(key) == voxel_map.end()) {
       voxel_map[key] = pt;
     }
@@ -207,11 +213,9 @@ CloudPtr Frontend::featureSample(const CloudPtr& cloud) const {
 
   CloudPtr out(new PointCloudType);
   out->reserve(voxel_map.size());
-
   for (const auto& kv : voxel_map) {
     out->push_back(kv.second);
   }
-
   return out;
 }
 
@@ -222,32 +226,22 @@ void Frontend::tryLoopClosure() {
   }
 
   const auto& current_kf = kfs.back();
-
-  // 添加到回环检测库
   loop_closure_->addKeyframe(current_kf);
 
-  // 检测回环
   if (frame_count_ % loop_closure_interval_ == 0) {
     std::vector<LoopPair> loop_pairs;
     if (loop_closure_->detect(current_kf, loop_pairs)) {
       LOG(INFO) << "检测到 " << loop_pairs.size() << " 个回环!";
-
-      // 全局优化
       backend_->globalOptimize(loop_pairs);
 
-      // 更新当前状态为优化后的最新关键帧位姿
       const auto& updated_kfs = backend_->getKeyFrames();
       if (!updated_kfs.empty()) {
         state_.p = updated_kfs.back().p;
         state_.q = updated_kfs.back().q;
-
-        // 重置 ESKF（下次 propagateFromTrustedPose 会从此起点重新递推）
         resetESKFWithOptimizedPose(state_);
       }
 
-      // 回环后重建地图（所有关键帧位姿都变了）
       rebuildMapFromKeyframes();
-
       LOG(INFO) << "回环优化完成，地图已重建";
     }
   }
@@ -263,7 +257,7 @@ void Frontend::saveMap(const std::string& save_dir) {
 
     CloudPtr cloud(new PointCloudType());
     if (pcl::io::loadPCDFile<PointType>(kf_path, *cloud) == -1) {
-      continue;  // 文件不存在则跳过
+      continue;
     }
 
     M4f T = M4f::Identity();
@@ -272,7 +266,6 @@ void Frontend::saveMap(const std::string& save_dir) {
 
     CloudPtr world_cloud(new PointCloudType());
     pcl::transformPointCloud(*cloud, *world_cloud, T);
-
     map_->addCloud(world_cloud);
   }
 
@@ -283,7 +276,7 @@ void Frontend::saveMap(const std::string& save_dir) {
 }
 
 void Frontend::resetESKFWithOptimizedPose(const State& state) {
-  // 用优化后轨迹的相邻 KF 位姿差分估算速度，替代直接继承 ESKF 累积速度
+  // 用优化后轨迹的相邻 KF 位姿差分估算速度
   V3d v_est = V3d::Zero();
   const auto& kfs = backend_->getKeyFrames();
   if (kfs.size() >= 2) {
@@ -294,17 +287,20 @@ void Frontend::resetESKFWithOptimizedPose(const State& state) {
     }
   }
 
-  eskf_->setState(state.q, state.p, v_est, state.timestamp);
+  // 设置 IESKF 全量状态
+  // 保留当前的 bg, ba, g 估计 (它们不受后端优化的影响)
+  State cur = ieskf_->getNominalState();
+  ieskf_->setState(state.q, state.p, v_est, cur.bg, cur.ba, cur.g, state.timestamp);
 
-  // 重置协方差：旋转/平移从一个合理先验出发，速度给较大不确定性
-  Eigen::Matrix<double, 9, 9> P_new = Eigen::Matrix<double, 9, 9>::Identity();
-  P_new.block<3, 3>(0, 0) *= 0.01;  // 旋转: 0.01 rad² (~5.7°)
-  P_new.block<3, 3>(3, 3) *= 0.05;  // 平移: 0.05 m² (~22cm)
-  P_new.block<3, 3>(6, 6) *= 1.0;   // 速度: 1.0 (m/s)²（差分估算，不确定性应设大）
-  eskf_->setCovariance(P_new);
+  // 重置协方差
+  Eigen::Matrix<double, 18, 18> P_new = Eigen::Matrix<double, 18, 18>::Identity() * 1e-4;
+  P_new.block<3, 3>(0, 0) *= 0.05;  // 位置: 0.05 m²
+  P_new.block<3, 3>(3, 3) *= 1.0;   // 速度: 1.0 (m/s)²
+  P_new.block<3, 3>(6, 6) *= 0.01;  // 旋转: 0.01 rad²
+  ieskf_->setCovariance(P_new);
 
-  LOG(INFO) << "[ESKF Reset] p=" << state.p.transpose() << " v_est=" << v_est.transpose()
-            << " q=" << state.q.coeffs().transpose();
+  LOG(INFO) << "[IESKF Reset] p=" << state.p.transpose() << " v_est=" << v_est.transpose()
+            << " g=" << cur.g.transpose();
 }
 
 void Frontend::mergeOptimizedKeyframesToMap() {
@@ -313,48 +309,41 @@ void Frontend::mergeOptimizedKeyframesToMap() {
     return;
   }
 
-  // 收集所有已优化但尚未合并的关键帧
   std::vector<int> merged_ids;
   for (size_t i = 0; i < kfs.size(); ++i) {
     const auto& kf = kfs[i];
     if (kf.merged) {
-      continue;  // 已合并的跳过
+      continue;
     }
-
     if (!kf.cloud || kf.cloud->empty()) {
       continue;
     }
 
-    // 使用优化后的位姿将点云投影到世界坐标系
     CloudPtr world_cloud(new PointCloudType());
     M4f T = M4f::Identity();
     T.block<3, 3>(0, 0) = kf.q.toRotationMatrix().cast<float>();
     T.block<3, 1>(0, 3) = kf.p.cast<float>();
     pcl::transformPointCloud(*kf.cloud, *world_cloud, T);
 
-    // 过滤已存在的体素
     CloudPtr new_cloud(new PointCloudType());
     new_cloud->reserve(world_cloud->size());
     for (const auto& pt : world_cloud->points) {
-      if (!map_->hasNearbyPoint(pt, 0.2f, NearbyType::CENTER)) {
+      if (!map_->hasNearbyCell(pt, 0.5f, NearbyType::CENTER)) {
         new_cloud->push_back(pt);
       }
     }
 
     map_->addCloud(new_cloud);
     merged_ids.push_back(kf.id);
-
     LOG(INFO) << "[MapMerge] KF#" << kf.id << " 添加 " << new_cloud->size() << " 点, 地图总数: " << map_->size();
   }
 
-  // 标记已合并
   if (!merged_ids.empty()) {
     backend_->markKeyframesMerged(merged_ids);
   }
 }
 
 void Frontend::rebuildMapFromKeyframes() {
-  // 回环后：清空地图，用所有优化后的关键帧重建
   map_->clearAll();
 
   const auto& kfs = backend_->getKeyFrames();
@@ -369,24 +358,18 @@ void Frontend::rebuildMapFromKeyframes() {
     T.block<3, 1>(0, 3) = kf.p.cast<float>();
     pcl::transformPointCloud(*kf.cloud, *world_cloud, T);
 
-    // 降采样避免过密
-    CloudPtr ds_world_cloud(new PointCloudType());
-    ds_world_cloud = dsCloud(world_cloud, 0.1f);  // 降采样后传给地图
-
+    CloudPtr ds_world_cloud = dsCloud(world_cloud, 0.1f);
     map_->addCloud(ds_world_cloud);
   }
 
-  // 重建后标记所有关键帧为已合并，后续新帧可以继续正常合并
   for (auto& kf : kfs) {
     kf.merged = true;
   }
 
   LOG(INFO) << "[MapRebuild] 回环后地图重建完成, 点数: " << map_->size();
 
-  // 重建后更新全局地图给 viewer
   if (is_use_viewer_ && viewer_ && viewer_->isRunning()) {
     viewer_->clearGlobalMap();
-    // 用重建后的地图填充全局地图
     auto rebuilt_cloud = map_->getCloud();
     viewer_->appendGlobalMap(rebuilt_cloud);
   }
@@ -399,17 +382,12 @@ void Frontend::propagateFromTrustedPose(const std::vector<ImuState>& imu_states,
     return;
   }
 
-  // 起点始终是 state_（上一帧配准/后端给出的可靠位姿）
-  // 不从上次 predict 结果继续，而是每次重新 setState
-  eskf_->setState(state_.q, state_.p, state_.v, state_.timestamp);
+  // 起点: 上一帧的可靠状态 (含在线估计的 bg, ba, g)
+  ieskf_->setState(state_.q, state_.p, state_.v, state_.bg, state_.ba, state_.g, state_.timestamp);
 
-  // 找到相对于 cloud_time 的最近 IMU 帧
-  // 从 state_ 的时间戳到 cloud_time 之间的 IMU 数据
   double start_time = state_.timestamp;
-  // timestamp 异常（被意外归零）时跳过递推，避免重放全部 IMU 史导致漂移
   if (start_time <= 0.0) {
-    LOG(ERROR) << "[IMU Propagate] state_.timestamp 异常(" << start_time
-               << "), 跳过递推, state_.p=" << state_.p.transpose();
+    LOG(ERROR) << "[IMU Propagate] state_.timestamp 异常(" << start_time << "), 跳过递推";
     return;
   }
 
@@ -417,7 +395,6 @@ void Frontend::propagateFromTrustedPose(const std::vector<ImuState>& imu_states,
     const auto& s1 = imu_states[i];
     const auto& s2 = imu_states[i + 1];
 
-    // 只处理 start_time 之后的 IMU 数据
     if (s1.timestamp < start_time) {
       continue;
     }
@@ -427,40 +404,41 @@ void Frontend::propagateFromTrustedPose(const std::vector<ImuState>& imu_states,
 
     double dt = s2.timestamp - s1.timestamp;
     if (dt <= 0.0 || dt > 0.1) {
-      continue;  // 时间戳异常才跳过
+      continue;
     }
 
     // 从 s1→s2 的相对运动提取角速度
     SE3 T_rel = s1.T.inverse() * s2.T;
     V3d gyr = T_rel.so3().log() / dt;
 
-    // 从原始 IMU 消息中按时间戳匹配提取加速度
+    // 从原始 IMU 消息中匹配提取加速度
     V3d acc_body = V3d::Zero();
     bool acc_found = false;
     for (const auto& imu_msg : imu_datas) {
       double msg_time = imu_msg.header.stamp.sec + imu_msg.header.stamp.nanosec * 1e-9;
-      if (std::abs(msg_time - s1.timestamp) < 0.005) {  // 5ms 内匹配
+      if (std::abs(msg_time - s1.timestamp) < 0.005) {
         acc_body << imu_msg.linear_acceleration.x, imu_msg.linear_acceleration.y, imu_msg.linear_acceleration.z;
         acc_body *= g_norm;  // g → m/s²
-        acc_body -= s1.ba;   // 减去加速度计 bias
+        // IESKF 内部会减去在线估计的 ba_，但 ba_ 目前不更新(始终为 0)
+        // 因此仍需减去 ImuProcessor 标定好的固定 bias
+        acc_body -= s1.ba;
         acc_found = true;
         break;
       }
     }
 
-    // 没有匹配到加速度数据，跳过该状态对，避免自由落体积分
     if (!acc_found) {
       continue;
     }
 
-    eskf_->predict(gyr, acc_body, dt, g_norm);
+    ieskf_->predict(gyr, acc_body, dt);
   }
 
   // 更新当前 state_ 为递推结果
-  state_ = eskf_->getNominalState();
+  state_ = ieskf_->getNominalState();
   state_.timestamp = cloud_time;
 
-  VLOG(1) << "[IMU Propagate] 短期递推 " << imu_states.size() << " 帧, pred_p=" << state_.p.transpose();
+  VLOG(1) << "[IMU Propagate] pred_p=" << state_.p.transpose() << " pred_g=" << state_.g.transpose();
 }
 
 void Frontend::initViewer() {

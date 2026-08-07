@@ -1,227 +1,270 @@
 #include "frontend/registration.hpp"
 #include <glog/logging.h>
 #include <tbb/tbb.h>
-#include <cstddef>
-#include <iostream>
-#include "cloud_utils/point_type.hpp"
+#include "utils/eigen_types.hpp"
 
-Registration::Registration() { covariance_.setZero(); }
+NDTRegistration::NDTRegistration(int max_iteration) : max_iteration_(max_iteration) {}
 
-M3d Registration::skew(const V3d& v) {
-  M3d m;
-  m << 0.0, -v.z(), v.y(), v.z(), 0.0, -v.x(), -v.y(), v.x(), 0.0;
-
-  return m;
+double NDTRegistration::huberWeight(double e) const {
+  if (e <= huber_k_) {
+    return 1.0;
+  }
+  return huber_k_ / e;
 }
 
-bool Registration::align(const CloudPtr& cloud, VoxelMap* map, State& state) {
-  if (map->size() < 100) {
+// ====== 旧接口: 独立 NDT 优化 (保留兼容, 不再被 process() 调用) ======
+bool NDTRegistration::align(const CloudPtr& cloud, VoxelMap* map, State& state) {
+  if (map == nullptr || map->size() < 100) {
+    LOG(WARNING) << "NDT map too small";
     return false;
   }
 
-  constexpr int MAX_ITER = 3;
-  constexpr float MAX_DIST = 0.5f;  // 最大匹配距离
-
-  inlier_count_ = 0;
   match_count_ = 0;
 
-  // 预计算旋转矩阵
-  for (int iter = 0; iter < MAX_ITER; ++iter) {
+  struct Reduction {
+    Eigen::Matrix<double, 6, 6> H = Eigen::Matrix<double, 6, 6>::Zero();
+    Eigen::Matrix<double, 6, 1> b = Eigen::Matrix<double, 6, 1>::Zero();
+    double error = 0;
+    int effective = 0;
+  };
+
+  Reduction result;
+
+  for (int iter = 0; iter < max_iteration_; iter++) {
     const M3d R = state.q.toRotationMatrix();
     const V3d t = state.p;
 
-    // 使用固定尺寸矩阵
-    struct Reduction {
-      Eigen::Matrix<double, 6, 6> H = Eigen::Matrix<double, 6, 6>::Zero();
-      Eigen::Matrix<double, 6, 1> b = Eigen::Matrix<double, 6, 1>::Zero();
-      double error = 0.0;
-      double error_raw = 0.0;  // 未加权的残差平方和(用于协方差)
-      int count = 0;
-
-      // 用于协方差计算的原始 Hessian (不加权)
-      Eigen::Matrix<double, 6, 6> H_raw = Eigen::Matrix<double, 6, 6>::Zero();
-    };
-
-    Reduction result = tbb::parallel_reduce(
-        tbb::blocked_range<size_t>(0, cloud->size(), 512), Reduction(),
-        [&](const tbb::blocked_range<size_t>& range, Reduction local) -> Reduction {
-          // 将 Jacobian矩阵放在循环外，防止反复构造
-          // J = [I, -R * skew(p)] 是 3x6 矩阵
+    result = tbb::parallel_reduce(
+        tbb::blocked_range<size_t>(0, cloud->size(), 256), Reduction(),
+        [&](const tbb::blocked_range<size_t>& range, Reduction local) {
           Eigen::Matrix<double, 3, 6> J;
-          M3d skew_p;
-          V3d p_lidar;
-          V3d pw;
-          V3d residual_vec;
-          PointType nearest_pt;
-          PointType search_pt;
-          float dist;
-
-          for (size_t i = range.begin(); i < range.end(); ++i) {
+          for (size_t i = range.begin(); i < range.end(); i++) {
             const auto& pt = cloud->points[i];
+            V3d p_lidar(pt.x, pt.y, pt.z);
+            V3d pw = R * p_lidar + t;
 
-            // 1. 计算世界坐标系下的点
-            p_lidar << pt.x, pt.y, pt.z;
+            PointType query;
+            query.x = static_cast<float>(pw.x());
+            query.y = static_cast<float>(pw.y());
+            query.z = static_cast<float>(pw.z());
 
-            // 2. 转到世界坐标系
-            pw = R * p_lidar + t;
-
-            // 3. 搜索最近点
-            search_pt.x = static_cast<float>(pw.x());
-            search_pt.y = static_cast<float>(pw.y());
-            search_pt.z = static_cast<float>(pw.z());
-
-            if (!map->nearestSearch(search_pt, nearest_pt, dist)) {
+            NDTCell cell;
+            if (!map->getCell(query, cell, NearbyType::NEARBY6)) {
+              continue;
+            }
+            if (!cell.ndt_estimated) {
               continue;
             }
 
-            if (dist > MAX_DIST) {
+            V3d e = pw - cell.mean;
+            double maha = e.transpose() * cell.info * e;
+            if (std::isnan(maha) || maha > res_outlier_th_) {
               continue;
             }
 
-            // 4. 残差向量
-            residual_vec = pw - V3d(nearest_pt.x, nearest_pt.y, nearest_pt.z);
-
-            // 5. Huber鲁棒核
-            // 原理: 对每个匹配点计算残差范数 |r| ,如果 |r| > k (默认 0.3m), 权重 < 1.0
-            // 作用: 坑洼地面/动态物体会产生大残差 → 权重降低,不会污染优化结果
-            double residual_norm = residual_vec.norm();
             double weight = 1.0;
-
             if (use_huber_) {
-              weight = huberWeight(residual_norm, huber_k_);
+              weight = huberWeight(std::sqrt(maha));
               if (weight < 0.01) {
                 continue;
               }
             }
 
-            // 6. 统计
-            local.count++;
-            local.error += weight * residual_vec.squaredNorm();
-            local.error_raw += residual_vec.squaredNorm();  // 未加权误差
-
-            // 7. 构造 J = [I, -R * skew(p_lidar)]
             J.block<3, 3>(0, 0).setIdentity();
-            J.block<3, 3>(0, 3) = -R * skew(p_lidar);
+            J.block<3, 3>(0, 3) = -R * skewSymmetric(p_lidar);
 
-            // 8. Huber加权
             double sqrt_w = std::sqrt(weight);
-            Eigen::Matrix<double, 3, 6> J_w = J * sqrt_w;
-            V3d r_w = residual_vec * sqrt_w;
-
-            local.H.noalias() += J_w.transpose() * J_w;
-            local.b.noalias() += -J_w.transpose() * r_w;
-
-            // 9. 不加权
-            local.H_raw.noalias() += J.transpose() * J;
+            local.H.noalias() += sqrt_w * J.transpose() * cell.info * J * sqrt_w;
+            local.b.noalias() += -sqrt_w * J.transpose() * cell.info * e * sqrt_w;
+            local.error += weight * maha;
+            local.effective++;
           }
-
           return local;
         },
-
         [](const Reduction& a, const Reduction& b) {
           Reduction out;
-
           out.H = a.H + b.H;
           out.b = a.b + b.b;
           out.error = a.error + b.error;
-          out.error_raw = a.error_raw + b.error_raw;
-          out.count = a.count + b.count;
-          out.H_raw = a.H_raw + b.H_raw;
+          out.effective = a.effective + b.effective;
           return out;
         });
 
-    if (result.count < 1000) {
-      LOG(WARNING) << "配准失败：匹配点数不足（" << result.count << ")";
+    if (result.effective < 100) {
+      LOG(WARNING) << "NDT effective points too small:" << result.effective;
       return false;
     }
 
-    match_count_ = result.count;
-
-    LOG(INFO) << "[Match] total_pts=" << cloud->size() << " matched=" << result.count << " ratio=" << std::fixed
-              << std::setprecision(3) << static_cast<float>(result.count) / cloud->size();
-
-    // 求解 H * dx = b ， LDLT分解
+    match_count_ = result.effective;
     Eigen::Matrix<double, 6, 1> dx = result.H.ldlt().solve(result.b);
 
-    // 平移更新
+    if (!dx.allFinite()) {
+      LOG(ERROR) << "NDT dx invalid";
+      return false;
+    }
+
     state.p += dx.head<3>();
-
-    // 旋转更新（SO3 指数映射）
     V3d dtheta = dx.tail<3>();
-    double dthata_norm = dtheta.norm();
-
-    // 使用 SO3指数映射更新旋转，比四元数近似更精确
-    if (dthata_norm > 1e-10) {
+    if (dtheta.norm() > 1e-12) {
       Qd dq = deltaQ(dtheta);
       state.q = (dq * state.q).normalized();
-    } else {
-      Qd dq(1.0, 0.5 * dtheta.x(), 0.5 * dtheta.y(), 0.5 * dtheta.z());
-      state.q = (dq * state.q).normalized();
     }
 
-    state.q.normalize();
-
-    if (iter == MAX_ITER - 1) {
-      inlier_count_ = 0;
-      {
-        const M3d R_final = state.q.toRotationMatrix();
-        const V3d t_final = state.p;
-
-        for (size_t i = 0; i < cloud->size(); ++i) {
-          const auto& pt = cloud->points[i];
-          const V3d p_lidar(pt.x, pt.y, pt.z);
-          const V3d pw_final = R_final * p_lidar + t_final;
-
-          PointType sp;
-          sp.x = static_cast<float>(pw_final.x());
-          sp.y = static_cast<float>(pw_final.y());
-          sp.z = static_cast<float>(pw_final.z());
-
-          PointType np;
-          float d;
-
-          if (!map->nearestSearch(sp, np, d)) {
-            continue;
-          }
-          if (d > MAX_DIST) {
-            continue;
-          }
-          V3d res = pw_final - V3d(np.x, np.y, np.z);
-          double w = use_huber_ ? huberWeight(res.norm(), huber_k_) : 1.0;
-          if (w > 0.5) {
-            inlier_count_++;  // 计算内点数
-          }
-        }
-        double sigma2_weighted = result.error / std::max(1, result.count - 6);
-
-        // SVD 稳健求逆，截断小奇异值防止信息矩阵爆炸
-        Eigen::JacobiSVD<Eigen::Matrix<double, 6, 6>> svd(result.H, Eigen::ComputeFullU | Eigen::ComputeFullV);
-        auto singular_values = svd.singularValues();
-        double max_sv = singular_values(0);
-        constexpr double COND_THRESH = 1e8;
-        Eigen::Vector<double, 6> inv_sv;
-        for (int i = 0; i < 6; ++i) {
-          if (singular_values(i) * COND_THRESH < max_sv) {
-            inv_sv(i) = 0.0;  // 截断小奇异值
-          } else {
-            inv_sv(i) = 1.0 / singular_values(i);
-          }
-        }
-        Eigen::Matrix<double, 6, 6> H_inv = svd.matrixV() * inv_sv.asDiagonal() * svd.matrixU().transpose();
-        covariance_ = sigma2_weighted * H_inv;
-
-        LOG(INFO) << "[Cov] sigma2=" << sigma2_weighted << " sv: " << singular_values.transpose()
-                  << " cov_diag: " << covariance_.diagonal().transpose();
-      }
-    }
-
-    LOG(INFO) << "iter = " << iter << " error = " << result.error / result.count << " count = " << result.count
-              << " inlier = " << inlier_count_ << (use_huber_ ? " Huber " : "");
+    LOG(INFO) << "NDT iter " << iter << " error " << result.error / result.effective << " effective "
+              << result.effective << " dx " << dx.norm();
 
     if (dx.norm() < 1e-4) {
       break;
     }
   }
 
+  // 协方差估计
+  {
+    constexpr double MIN_EIGEN = 1e-8, MAX_EIGEN = 1e8;
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 6, 6>> eig(result.H);
+    auto eigenvalues = eig.eigenvalues();
+    auto eigenvectors = eig.eigenvectors();
+
+    Eigen::Matrix<double, 6, 1> inv_eigen;
+    for (int i = 0; i < 6; ++i) {
+      double clamped = std::max(MIN_EIGEN, std::min(MAX_EIGEN, eigenvalues(i)));
+      inv_eigen(i) = 1.0 / clamped;
+    }
+    covariance_ = eigenvectors * inv_eigen.asDiagonal() * eigenvectors.transpose();
+    covariance_ = (covariance_ + covariance_.transpose()) / 2.0;
+
+    double sigma2 = result.error / std::max(1, result.effective - 6);
+    covariance_ *= sigma2;
+
+    LOG(INFO) << "[NDT Cov] sigma2=" << sigma2 << " H_eigen: " << eigenvalues.transpose()
+              << " cov_diag: " << covariance_.diagonal().transpose();
+  }
+
   return true;
+}
+
+// IEKF 观测回调
+// Jacobian (3×18) 非零块:
+//   J = [I₃, 0, A, 0, 0, 0]  其中 A = -R·skew(q)
+// 误差状态顺序: [δp(0:3), δv(3:6), δR(6:9), δbg(9:12), δba(12:15), δg(15:18)]
+int NDTRegistration::computeResidualAndJacobians(const VoxelMap* map, const SE3& input_pose,
+                                                 Eigen::Matrix<double, 18, 18>& HTVH,
+                                                 Eigen::Matrix<double, 18, 1>& HTVr) {
+  if (!source_ || source_->empty()) {
+    LOG(WARNING) << "[NDT] source point cloud is empty";
+    HTVH.setZero();
+    HTVr.setZero();
+    return 0;
+  }
+
+  if (!map || map->size() < 50) {
+    LOG(WARNING) << "[NDT] map too small";
+    HTVH.setZero();
+    HTVr.setZero();
+    return 0;
+  }
+
+  const double outlier_th = res_outlier_th_;
+  const double ratio = info_ratio_;
+  const size_t N = source_->size();
+
+  struct NdtAccumulator {
+    Eigen::Matrix<double, 18, 18> H;
+    Eigen::Matrix<double, 18, 1> b;
+    int effective = 0;
+    const VoxelMap* map;
+    const CloudPtr* source;
+    SE3 pose;
+    double outlier_th;
+
+    NdtAccumulator(const VoxelMap* m, const CloudPtr* s, const SE3& p, double th)
+        : map(m), source(s), pose(p), outlier_th(th) {
+      H.setZero();
+      b.setZero();
+    }
+
+    NdtAccumulator(NdtAccumulator& other, tbb::split)
+        : map(other.map), source(other.source), pose(other.pose), outlier_th(other.outlier_th) {
+      H.setZero();
+      b.setZero();
+      effective = 0;
+    }
+
+    void operator()(const tbb::blocked_range<size_t>& range) {
+      const M3d pose_R = pose.so3().matrix();
+      const V3d pose_t = pose.translation();
+
+      for (size_t idx = range.begin(); idx != range.end(); ++idx) {
+        const auto& pt = (*source)->points[idx];
+        V3d q(pt.x, pt.y, pt.z);
+
+        // 将点变换到世界坐标
+        V3d qs = pose_R * q + pose_t;
+
+        PointType query;
+        query.x = static_cast<float>(qs.x());
+        query.y = static_cast<float>(qs.y());
+        query.z = static_cast<float>(qs.z());
+
+        NDTCell cell;
+        if (!map->getCell(query, cell, NearbyType::NEARBY6)) {
+          continue;
+        }
+        if (!cell.ndt_estimated) {
+          continue;
+        }
+
+        // 残差: e = qs - μ
+        V3d e = qs - cell.mean;
+
+        // 马氏距离离群检测
+        double maha = e.transpose() * cell.info * e;
+        if (std::isnan(maha) || maha > outlier_th) {
+          continue;
+        }
+
+        // A = -R · skew(q)  (Jacobian 旋转块)
+        M3d A = -pose_R * SO3::hat(q);
+
+        const M3d& W = cell.info;
+        M3d WA = W * A;
+        V3d We = W * e;
+
+        // H += Jᵀ·W·J  (仅 δp 和 δR 块非零)
+        H.block<3, 3>(0, 0).noalias() += W;                   // δp-δp
+        H.block<3, 3>(0, 6).noalias() += WA;                  // δp-δR
+        H.block<3, 3>(6, 0).noalias() += WA.transpose();      // δR-δp
+        H.block<3, 3>(6, 6).noalias() += A.transpose() * WA;  // δR-δR
+
+        // b += -Jᵀ·W·e  (仅 δp 和 δR 块非零)
+        b.segment<3>(0).noalias() -= We;                  // δp
+        b.segment<3>(6).noalias() -= A.transpose() * We;  // δR
+
+        effective++;
+      }
+    }
+
+    void join(const NdtAccumulator& other) {
+      H += other.H;
+      b += other.b;
+      effective += other.effective;
+    }
+  };
+
+  NdtAccumulator acc(map, &source_, input_pose, outlier_th);
+
+  int half_threads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+  tbb::task_arena arena(half_threads);
+  arena.execute([&] { tbb::parallel_reduce(tbb::blocked_range<size_t>(0, N, 256), acc); });
+
+  match_count_ = acc.effective;
+
+  // 这使得 NDT 观测的等效噪声放大 100 倍，IMU 预测在 IEKF 中有更大权重
+  // 这是保守策略，防止有偏差的 NDT 分布过度主导状态估计
+  HTVH = acc.H * ratio;
+  HTVr = acc.b * ratio;
+
+  LOG(INFO) << "[NDT Obs] effective=" << acc.effective << " H_norm=" << acc.H.norm() << " b_norm=" << acc.b.norm();
+
+  return acc.effective;
 }

@@ -1,111 +1,149 @@
 #include "frontend/voxel_map.hpp"
-#include "cloud_utils/point_type.hpp"
+#include <Eigen/Eigenvalues>
 
-const std::vector<VoxelKey> VoxelMap::kNeighborOffset7{
-    {0, 0, 0},   // 中心
-    {1, 0, 0},   // 右
-    {-1, 0, 0},  // 左
-    {0, 1, 0},   // 上
-    {0, -1, 0},  // 下
-    {0, 0, 1},   // 前
-    {0, 0, -1},  // 后
-};
+// neighbor
+const std::vector<VoxelKey> VoxelMap::kNeighborOffset7{{0, 0, 0},  {1, 0, 0}, {-1, 0, 0}, {0, 1, 0},
+                                                       {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
 
 const std::vector<VoxelKey> VoxelMap::kNeighborOffset27 = []() {
-  std::vector<VoxelKey> offsets;
-  for (int dx = -1; dx <= 1; ++dx) {
-    for (int dy = -1; dy <= 1; ++dy) {
-      for (int dz = -1; dz <= 1; ++dz) {
-        offsets.push_back({dx, dy, dz});
+  std::vector<VoxelKey> v;
+
+  for (int x = -1; x <= 1; x++) {
+    for (int y = -1; y <= 1; y++) {
+      for (int z = -1; z <= 1; z++) {
+        v.push_back({x, y, z});
       }
     }
   }
-  return offsets;
+
+  return v;
 }();
+
+const std::vector<VoxelKey> VoxelMap::kCenterOnly{{0, 0, 0}};
 
 VoxelMap::VoxelMap(float voxel_size, float block_size, int local_block_radius)
     : voxel_size_(voxel_size), block_size_(block_size), local_block_radius_(local_block_radius) {}
 
-size_t VoxelMap::size() const { return voxel_map_.size(); }
+size_t VoxelMap::size() const { return ndt_map_.size(); }
 
 VoxelKey VoxelMap::pointToVoxel(const PointType& pt) const {
   return {static_cast<int>(std::floor(pt.x / voxel_size_)), static_cast<int>(std::floor(pt.y / voxel_size_)),
           static_cast<int>(std::floor(pt.z / voxel_size_))};
 }
 
-BlockKey VoxelMap::voxelToBlock(const VoxelKey& vkey) const {
-  // 一个区块包含 floor(block_size_ / voxel_size_)个体素
-  int vperblock = static_cast<int>(std::floor(block_size_ / voxel_size_));
-  return {vkey.x / vperblock, vkey.y / vperblock, vkey.z / vperblock};
+BlockKey VoxelMap::voxelToBlock(const VoxelKey& key) const {
+  int vpb = static_cast<int>(block_size_ / voxel_size_);
+  return {key.x / vpb, key.y / vpb, key.z / vpb};
 }
 
 void VoxelMap::addCloud(const CloudPtr& cloud) {
-  for (const auto& pt : cloud->points) {
+  for (const auto& pt : *cloud) {
     VoxelKey key = pointToVoxel(pt);
-    voxel_map_[key] = pt;
+
+    auto& cell = ndt_map_[key];
+
+    V3d p(pt.x, pt.y, pt.z);
+
+    cell.points_num++;
+    cell.sum += p;
+    cell.sum_sq += p * p.transpose();
+
+    updateCell(cell);
   }
 }
 
-bool VoxelMap::nearestSearch(const PointType& pt, PointType& nearest_pt, float& nearest_dist, NearbyType nearby) const {
+void VoxelMap::updateCell(NDTCell& cell) {
+  // 已饱和的体素不再更新
+  if (cell.ndt_estimated && cell.points_num >= NDTCell::MAX_POINTS) {
+    return;
+  }
+
+  if (cell.points_num < 5) {
+    cell.ndt_estimated = false;
+    return;
+  }
+
+  double n = static_cast<double>(cell.points_num);
+
+  cell.mean = cell.sum / n;
+  cell.covariance = cell.sum_sq / n - cell.mean * cell.mean.transpose();
+
+  // 只用极轻的绝对正则化防止奇异
+  cell.covariance += M3d::Identity() * 1e-3;
+
+  // SVD 后做相对条件数约束，保留各向异性
+  Eigen::JacobiSVD<M3d> svd(cell.covariance, Eigen::ComputeFullU | Eigen::ComputeFullV);
+  V3d lambda = svd.singularValues();
+
+  // 相对约束：最小特征值不低于最大特征值的 1/1000
+  // 这保留了地面的 Z<<XY 结构，同时防止完全退化
+  if (lambda[1] < lambda[0] * 1e-3) {
+    lambda[1] = lambda[0] * 1e-3;
+  }
+  if (lambda[2] < lambda[0] * 1e-3) {
+    lambda[2] = lambda[0] * 1e-3;
+  }
+
+  M3d lambda_inv = V3d(1.0 / lambda[0], 1.0 / lambda[1], 1.0 / lambda[2]).asDiagonal();
+  cell.info = svd.matrixV() * lambda_inv * svd.matrixU().transpose();
+  cell.ndt_estimated = true;
+}
+
+bool VoxelMap::getCell(const PointType& pt, NDTCell& cell, NearbyType nearby) const {
   VoxelKey center = pointToVoxel(pt);
-  nearest_dist = std::numeric_limits<float>::max();
-  bool found = false;
 
-  const auto& offsets = (nearby == NearbyType::NEARBY6) ? kNeighborOffset7 : kNeighborOffset27;
+  const auto& offsets = (nearby == NearbyType::NEARBY26) ? kNeighborOffset27
+                        : (nearby == NearbyType::CENTER) ? kCenterOnly
+                                                         : kNeighborOffset7;
 
-  for (const auto& offset : offsets) {
-    VoxelKey key{center.x + offset.x, center.y + offset.y, center.z + offset.z};
+  for (const auto& off : offsets) {
+    VoxelKey key{center.x + off.x, center.y + off.y, center.z + off.z};
 
-    auto iter = voxel_map_.find(key);
-    if (iter == voxel_map_.end()) {
+    auto iter = ndt_map_.find(key);
+
+    if (iter == ndt_map_.end()) {
       continue;
     }
 
-    const auto& candidate = iter->second;
-
-    // 使用平方距离可以避免sqrt
-    float rx = pt.x - candidate.x;
-    float ry = pt.y - candidate.y;
-    float rz = pt.z - candidate.z;
-
-    float dist2 = rx * rx + ry * ry + rz * rz;
-
-    if (dist2 < nearest_dist) {
-      nearest_dist = dist2;
-      nearest_pt = candidate;
-      found = true;
+    if (!iter->second.ndt_estimated) {
+      continue;
     }
+
+    cell = iter->second;
+
+    return true;
   }
 
-  if (found) {
-    nearest_dist = std::sqrt(nearest_dist);
-  }
-
-  return found;
+  return false;
 }
 
-bool VoxelMap::hasNearbyPoint(const PointType& pt, float radius, NearbyType nearby) const {
+bool VoxelMap::hasNearbyCell(const PointType& pt, float radius, NearbyType nearby) const {
   VoxelKey center = pointToVoxel(pt);
   float radius2 = radius * radius;
 
-  const auto& offsets = (nearby == NearbyType::NEARBY6) ? kNeighborOffset7 : kNeighborOffset27;
+  // CENTER: 仅检查中心体素; NEARBY6: 7邻域; NEARBY26: 27邻域
+  const auto& offsets = (nearby == NearbyType::NEARBY26) ? kNeighborOffset27
+                        : (nearby == NearbyType::CENTER) ? kCenterOnly
+                                                         : kNeighborOffset7;  // NEARBY6
 
-  for (const auto& offset : offsets) {
-    VoxelKey key{center.x + offset.x, center.y + offset.y, center.z + offset.z};
+  for (const auto& off : offsets) {
+    VoxelKey key{center.x + off.x, center.y + off.y, center.z + off.z};
 
-    auto iter = voxel_map_.find(key);
-    if (iter == voxel_map_.end()) {
+    auto iter = ndt_map_.find(key);
+    if (iter == ndt_map_.end()) {
       continue;
     }
 
-    const auto& candidate = iter->second;
+    if (!iter->second.ndt_estimated) {
+      continue;
+    }
 
-    // 使用平方距离可以避免sqrt
-    float rx = pt.x - candidate.x;
-    float ry = pt.y - candidate.y;
-    float rz = pt.z - candidate.z;
-
-    float dist2 = rx * rx + ry * ry + rz * rz;
+    // 检查体素的均值中心是否在搜索半径内
+    const V3d& mean = iter->second.mean;
+    float dx = pt.x - static_cast<float>(mean.x());
+    float dy = pt.y - static_cast<float>(mean.y());
+    float dz = pt.z - static_cast<float>(mean.z());
+    float dist2 = dx * dx + dy * dy + dz * dz;
 
     if (dist2 < radius2) {
       return true;
@@ -116,50 +154,60 @@ bool VoxelMap::hasNearbyPoint(const PointType& pt, float radius, NearbyType near
 }
 
 void VoxelMap::setLocalCenter(const V3d& center) {
-  // 将中心点转换为区块坐标
-  int vperblock = static_cast<int>(std::floor(block_size_ / voxel_size_));
-  VoxelKey center_voxel{static_cast<int>(std::floor(center.x() / voxel_size_)),
-                        static_cast<int>(std::floor(center.y() / voxel_size_)),
-                        static_cast<int>(std::floor(center.z() / voxel_size_))};
-  BlockKey center_block{center_voxel.x / vperblock, center_voxel.y / vperblock, center_voxel.z / vperblock};
+  int vpb = static_cast<int>(block_size_ / voxel_size_);
 
-  // 如果区块中心没变，跳过
-  if (center_block == last_block_center_) {
+  VoxelKey cv{static_cast<int>(std::floor(center.x() / voxel_size_)),
+              static_cast<int>(std::floor(center.y() / voxel_size_)),
+              static_cast<int>(std::floor(center.z() / voxel_size_))};
+
+  BlockKey cb{cv.x / vpb, cv.y / vpb, cv.z / vpb};
+
+  if (cb == last_block_center_) {
     return;
   }
-  last_block_center_ = center_block;
 
-  // 标记当前活跃区块
-  tbb::concurrent_unordered_map<BlockKey, int, BlockHash> new_active;
+  last_block_center_ = cb;
 
-  for (int dx = -local_block_radius_; dx <= local_block_radius_; ++dx) {
-    for (int dy = -local_block_radius_; dy <= local_block_radius_; ++dy) {
-      for (int dz = -local_block_radius_; dz <= local_block_radius_; ++dz) {
-        BlockKey bk{center_block.bx + dx, center_block.by + dy, center_block.bz + dz};
-        new_active.insert({bk, 1});
+  tbb::concurrent_unordered_map<BlockKey, int, BlockHash> active;
+
+  for (int x = -local_block_radius_; x <= local_block_radius_; x++) {
+    for (int y = -local_block_radius_; y <= local_block_radius_; y++) {
+      for (int z = -local_block_radius_; z <= local_block_radius_; z++) {
+        active.insert({{cb.bx + x, cb.by + y, cb.bz + z}, 1});
       }
     }
   }
 
-  // 遍历所有真实存在的体素，删除不在新活跃集合中的体素
-  for (auto iter = voxel_map_.begin(); iter != voxel_map_.end();) {
+  for (auto iter = ndt_map_.begin(); iter != ndt_map_.end();) {
     BlockKey bk = voxelToBlock(iter->first);
-    if (new_active.find(bk) == new_active.end()) {
-      iter = voxel_map_.unsafe_erase(iter);
+
+    if (active.find(bk) == active.end()) {
+      iter = ndt_map_.unsafe_erase(iter);
+
     } else {
       ++iter;
     }
   }
 
-  active_blocks_ = std::move(new_active);
+  active_blocks_ = std::move(active);
 }
 
 CloudPtr VoxelMap::getCloud() const {
   CloudPtr cloud(new PointCloudType());
-  cloud->reserve(voxel_map_.size());
 
-  for (const auto& kv : voxel_map_) {
-    cloud->push_back(kv.second);
+  cloud->reserve(ndt_map_.size());
+
+  for (const auto& kv : ndt_map_) {
+    if (!kv.second.ndt_estimated) {
+      continue;
+    }
+
+    PointType pt;
+    pt.x = static_cast<float>(kv.second.mean.x());
+    pt.y = static_cast<float>(kv.second.mean.y());
+    pt.z = static_cast<float>(kv.second.mean.z());
+
+    cloud->push_back(pt);
   }
 
   return cloud;

@@ -41,13 +41,10 @@ int main(int argc, char** argv) {
   CloudProcessor cloud_processor(config);
 
   auto frontend = std::make_shared<Frontend>(config);
-  frontend->setESKFParams(1.7e-4,  // 陀螺仪噪声密度
-                          2.0e-3,  // 加速度计噪声密度
-                          0.05,    // 角度观测噪声 (rad, ~2.86°)
-                          0.1      // 位置观测噪声 (m)
-  );
-  frontend->setImuBiasNoise(1.0e-5,   // 陀螺仪 bias 随机游走 rad/s/√Hz (很小)
-                            5.0e-5);  // 加速度计 bias 随机游走 m/s²/√Hz
+  frontend->setESKFParams(1.7e-4,   // 陀螺仪噪声密度 (rad/s/√Hz)
+                          2.0e-3,   // 加速度计噪声密度 (m/s²/√Hz)
+                          1.0e-5,   // 陀螺仪 bias 随机游走 (rad/s²/√Hz)
+                          5.0e-5);  // 加速度计 bias 随机游走 (m/s³/√Hz)
   frontend->setKeyframeParams(0.5,    // 关键帧距离阈值 (米)
                               0.35    // 关键帧角度阈值 (rad, ~20°)
   );

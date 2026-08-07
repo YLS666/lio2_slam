@@ -97,7 +97,7 @@ add_executable (
   src/frontend/frontend.cpp
   src/frontend/registration.cpp
   src/frontend/voxel_map.cpp
-  src/estimator/eskf.cpp
+  src/estimator/ieskf.cpp
   src/backend/backend.cpp
   src/loop_closure/loop_closure.cpp
   src/loop_closure/scan_context.cpp
