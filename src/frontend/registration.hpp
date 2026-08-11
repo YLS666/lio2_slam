@@ -33,8 +33,7 @@ class NDTRegistration {
    * @param HTVr        [输出] HᵀV⁻¹r (18×1)
    * @return            有效匹配点数
    */
-  int computeResidualAndJacobians(const VoxelMap* map, const SE3& input_pose,
-                                  Eigen::Matrix<double, 18, 18>& HTVH,
+  int computeResidualAndJacobians(const VoxelMap* map, const SE3& input_pose, Eigen::Matrix<double, 18, 18>& HTVH,
                                   Eigen::Matrix<double, 18, 1>& HTVr);
 
   int matchCount() const { return match_count_; }

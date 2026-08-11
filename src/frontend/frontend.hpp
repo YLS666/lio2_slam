@@ -125,7 +125,13 @@ class Frontend {
   bool initialized_ = false;
   int frame_count_ = 0;
 
-  int loop_closure_interval_ = 50;
+  int loop_closure_interval_ = 10;   // 每10个关键帧检测一次回环
+  int kf_since_loop_check_ = 0;
+
+  // 回环滞后应用: 全局优化后不立即替换地图, 等连续N帧配准成功后再应用
+  bool pending_rebuild_ = false;
+  int consecutive_stable_ = 0;
+  static constexpr int kPendingRebuildThreshold = 5;
 
   // 配准后的特征点云 (用于关键帧)
   CloudPtr last_feature_cloud_;

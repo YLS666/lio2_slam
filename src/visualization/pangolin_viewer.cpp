@@ -64,8 +64,6 @@ void PangolinViewer::stop() {
   LOG(INFO) << "PangolinViewer stopped";
 }
 
-// ===================== 数据更新接口（线程安全） =====================
-
 void PangolinViewer::updateCurrentCloud(const CloudPtr& cloud) {
   std::lock_guard<std::mutex> lock(data_mutex_);
   *current_cloud_ = *cloud;
@@ -132,7 +130,7 @@ void PangolinViewer::FollowRobot() {
 
   // up向量：【世界固定向上，永远不变0,0,-1，绝对不能变】
   camera_->SetModelViewMatrix(pangolin::ModelViewLookAt(cam_gl.x(), cam_gl.y(), cam_gl.z(), target_gl.x(),
-                                                        target_gl.y(), target_gl.z(), pangolin::AxisZ));
+                                                        target_gl.y(), target_gl.z(), 0, 0, -1));
 }
 
 void PangolinViewer::updatePose(const V3d& p, const Qd& q, double timestamp) {
@@ -156,8 +154,6 @@ void PangolinViewer::updateMotionInfo(const V3d& vel, const V3d& gyr_raw, const 
   gyr_magnitude_ = static_cast<float>(gyr_raw.norm());
   acc_magnitude_ = static_cast<float>(acc_raw.norm());
 }
-
-// ===================== 主渲染循环 =====================
 
 void PangolinViewer::run() {
   try {
