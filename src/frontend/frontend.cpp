@@ -182,7 +182,7 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
           double pos_diff = (last_kf.p - state_.p).norm();
           double angle_diff = 2.0 * std::acos(std::min(1.0, std::abs((state_.q.inverse() * last_kf.q).w())));
 
-          if (pos_diff < 0.5 && angle_diff < 0.2) {
+          if (pos_diff < 1.0 || angle_diff < 0.2) {
             state_.p = last_kf.p;
             state_.q = last_kf.q;
             resetESKFWithOptimizedPose(state_);

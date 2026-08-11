@@ -147,7 +147,7 @@ bool Backend::slideWindowOptimize() {
     double dp = (rel_p_computed - kf_next.relative_p).norm();
     double dtheta = 2.0 * std::acos(std::min(1.0, std::abs((kf_next.relative_q.inverse() * rel_q_computed).w())));
 
-    if (dp > 0.01 || dtheta > 0.001) {
+    if (dp > 0.01 || dtheta > 0.01) {
       // 不一致：用位姿本身重算 relative，维持后续一致性
       LOG(WARNING) << "[SlideWindow] 边 " << kf_cur.id << "→" << kf_next.id << " 不一致: rel_p 差值=" << dp
                    << "m, rel_q 差值=" << dtheta << "rad，以位姿为准重算";

@@ -41,12 +41,12 @@ int main(int argc, char** argv) {
   CloudProcessor cloud_processor(config);
 
   auto frontend = std::make_shared<Frontend>(config);
-  frontend->setESKFParams(1.7e-4,   // 陀螺仪噪声密度 (rad/s/√Hz)
-                          2.0e-3,   // 加速度计噪声密度 (m/s²/√Hz)
-                          1.0e-6,   // 陀螺仪 bias 随机游走 (rad/s²/√Hz)
-                          1.0e-7);  // 加速度计 bias 随机游走 (m/s³/√Hz)
-  frontend->setKeyframeParams(0.5,  // 关键帧距离阈值 (米)
-                              0.35  // 关键帧角度阈值 (rad, ~20°)
+  frontend->setESKFParams(1.7e-4,    // 陀螺仪噪声密度 (rad/s/√Hz)
+                          2.0e-3,    // 加速度计噪声密度 (m/s²/√Hz)
+                          1.0e-6,    // 陀螺仪 bias 随机游走 (rad/s²/√Hz)
+                          1.0e-7);   // 加速度计 bias 随机游走 (m/s³/√Hz)
+  frontend->setKeyframeParams(1.0,   // 关键帧距离阈值 (米)
+                              0.175  // 关键帧角度阈值 (rad, ~10°)
   );
   frontend->setMaxKeyFrames(5000);  // 位姿骨架全保留（~1.5MB）
   frontend->setMaxKfClouds(300);    // 只保留最近 300 帧点云（~19MB）
