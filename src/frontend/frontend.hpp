@@ -54,13 +54,11 @@ class Frontend {
    * 用 imu_states 中相对于点云时间的最近 N 帧做一次性递推，
    * 作为当前帧配准的初值。
    *
-   * @param imu_states  IMU 状态序列（来自 ImuProcessor 的 states_）
    * @param imu_datas   原始 IMU 消息队列
    * @param cloud_time  当前点云帧的时间戳
    * @param g_norm      重力范数 (IESKF 内部估计 g, 此参数仅用于 IMU 消息的 g→m/s² 转换)
    */
-  void propagateFromTrustedPose(const std::vector<ImuState>& imu_states,
-                                const std::deque<sensor_msgs::msg::Imu>& imu_datas, double cloud_time, double g_norm);
+  void propagateFromTrustedPose(const std::deque<sensor_msgs::msg::Imu>& imu_datas, double cloud_time, double g_norm);
 
   /**
    * @brief NDT + IESKF 配准 (每帧点云数据调用)
@@ -125,7 +123,7 @@ class Frontend {
   bool initialized_ = false;
   int frame_count_ = 0;
 
-  int loop_closure_interval_ = 10;   // 每10个关键帧检测一次回环
+  int loop_closure_interval_ = 10;  // 每10个关键帧检测一次回环
   int kf_since_loop_check_ = 0;
 
   // 回环滞后应用: 全局优化后不立即替换地图, 等连续N帧配准成功后再应用

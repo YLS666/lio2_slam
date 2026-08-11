@@ -23,10 +23,10 @@ Frontend::Frontend(AllConfig config)
   ieskf_opt.num_iterations_ = 3;  // IEKF 迭代次数
   ieskf_opt.gyr_noise_ = 1.7e-4;  // 陀螺仪白噪声
   ieskf_opt.acc_noise_ = 2.0e-3;  // 加速度计白噪声
-  ieskf_opt.bg_noise_ = 1e10;     // bg 随机游走: 极大 = 不更新 (已由 ImuProcessor 标定)
-  ieskf_opt.ba_noise_ = 1e10;     // ba 随机游走: 极大 = 不更新
-  ieskf_opt.update_bg_ = false;   // bg 不更新 (ImuProcessor 已处理)
-  ieskf_opt.update_ba_ = false;   // ba 不更新
+  ieskf_opt.bg_noise_ = 1e-6;     // bg 随机游走
+  ieskf_opt.ba_noise_ = 1e-7;     // ba 随机游走
+  ieskf_opt.update_bg_ = true;    // bg 在线估计
+  ieskf_opt.update_ba_ = true;    // ba 在线估计
   // 注意: g_ (重力向量) 总是会被更新, 这是修复 Z 轴漂移的关键
   ieskf_ = std::make_unique<IESKF>(ieskf_opt);
 
@@ -419,14 +419,14 @@ void Frontend::rebuildMapFromKeyframes() {
   }
 }
 
-void Frontend::propagateFromTrustedPose(const std::vector<ImuState>& imu_states,
-                                        const std::deque<sensor_msgs::msg::Imu>& imu_datas, double cloud_time,
+void Frontend::propagateFromTrustedPose(const std::deque<sensor_msgs::msg::Imu>& imu_datas, double cloud_time,
                                         double g_norm) {
-  if (!initialized_ || imu_states.size() < 2) {
+  if (!initialized_ || imu_datas.size() < 2) {
     return;
   }
 
   // 起点: 上一帧的可靠状态 (含在线估计的 bg, ba, g)
+  // bg 以 ImuProcessor 标定值为初值，IESKF 在线微调，跨帧保持
   ieskf_->setState(state_.q, state_.p, state_.v, state_.bg, state_.ba, state_.g, state_.timestamp);
 
   double start_time = state_.timestamp;
@@ -435,54 +435,52 @@ void Frontend::propagateFromTrustedPose(const std::vector<ImuState>& imu_states,
     return;
   }
 
-  for (size_t i = 0; i < imu_states.size() - 1; ++i) {
-    const auto& s1 = imu_states[i];
-    const auto& s2 = imu_states[i + 1];
+  int predict_count = 0;
+  for (size_t i = 0; i < imu_datas.size() - 1; ++i) {
+    const auto& imu0 = imu_datas[i];
+    const auto& imu1 = imu_datas[i + 1];
 
-    if (s1.timestamp < start_time) {
+    double t0 = imu0.header.stamp.sec + imu0.header.stamp.nanosec * 1e-9;
+    double t1 = imu1.header.stamp.sec + imu1.header.stamp.nanosec * 1e-9;
+
+    // 跳过 start_time 之前的 IMU，超过 cloud_time 停止
+    if (t1 < start_time) {
       continue;
     }
-    if (s1.timestamp > cloud_time) {
+    if (t0 > cloud_time) {
       break;
     }
 
-    double dt = s2.timestamp - s1.timestamp;
+    double dt = t1 - t0;
     if (dt <= 0.0 || dt > 0.1) {
       continue;
     }
 
-    // 从 s1→s2 的相对运动提取角速度
-    SE3 T_rel = s1.T.inverse() * s2.T;
-    V3d gyr = T_rel.so3().log() / dt;
+    // 直接使用原始 IMU 陀螺仪和加速度计测量值
+    V3d gyr0(imu0.angular_velocity.x, imu0.angular_velocity.y, imu0.angular_velocity.z);
+    V3d gyr1(imu1.angular_velocity.x, imu1.angular_velocity.y, imu1.angular_velocity.z);
+    V3d acc0(imu0.linear_acceleration.x, imu0.linear_acceleration.y, imu0.linear_acceleration.z);
+    V3d acc1(imu1.linear_acceleration.x, imu1.linear_acceleration.y, imu1.linear_acceleration.z);
 
-    // 从原始 IMU 消息中匹配提取加速度
-    V3d acc_body = V3d::Zero();
-    bool acc_found = false;
-    for (const auto& imu_msg : imu_datas) {
-      double msg_time = imu_msg.header.stamp.sec + imu_msg.header.stamp.nanosec * 1e-9;
-      if (std::abs(msg_time - s1.timestamp) < 0.005) {
-        acc_body << imu_msg.linear_acceleration.x, imu_msg.linear_acceleration.y, imu_msg.linear_acceleration.z;
-        acc_body *= g_norm;  // g → m/s²
-        // IESKF 内部会减去在线估计的 ba_，但 ba_ 目前不更新(始终为 0)
-        // 因此仍需减去 ImuProcessor 标定好的固定 bias
-        acc_body -= s1.ba;
-        acc_found = true;
-        break;
-      }
-    }
+    // g → m/s²
+    acc0 *= g_norm;
+    acc1 *= g_norm;
 
-    if (!acc_found) {
-      continue;
-    }
+    // 中值积分
+    V3d gyr_mid = 0.5 * (gyr0 + gyr1);
+    V3d acc_mid = 0.5 * (acc0 + acc1);
 
-    ieskf_->predict(gyr, acc_body, dt);
+    // IESKF::predict() 内部减去在线估计的 bg_/ba_
+    ieskf_->predict(gyr_mid, acc_mid, dt);
+    predict_count++;
   }
 
   // 更新当前 state_ 为递推结果
   state_ = ieskf_->getNominalState();
   state_.timestamp = cloud_time;
 
-  VLOG(1) << "[IMU Propagate] pred_p=" << state_.p.transpose() << " pred_g=" << state_.g.transpose();
+  VLOG(1) << "[IMU Propagate] predict_count=" << predict_count << " pred_p=" << state_.p.transpose()
+          << " pred_bg=" << state_.bg.transpose() << " pred_g=" << state_.g.transpose();
 }
 
 void Frontend::initViewer() {

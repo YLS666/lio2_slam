@@ -43,10 +43,10 @@ int main(int argc, char** argv) {
   auto frontend = std::make_shared<Frontend>(config);
   frontend->setESKFParams(1.7e-4,   // 陀螺仪噪声密度 (rad/s/√Hz)
                           2.0e-3,   // 加速度计噪声密度 (m/s²/√Hz)
-                          1.0e-5,   // 陀螺仪 bias 随机游走 (rad/s²/√Hz)
-                          5.0e-5);  // 加速度计 bias 随机游走 (m/s³/√Hz)
-  frontend->setKeyframeParams(0.5,    // 关键帧距离阈值 (米)
-                              0.35    // 关键帧角度阈值 (rad, ~20°)
+                          1.0e-6,   // 陀螺仪 bias 随机游走 (rad/s²/√Hz)
+                          1.0e-7);  // 加速度计 bias 随机游走 (m/s³/√Hz)
+  frontend->setKeyframeParams(0.5,  // 关键帧距离阈值 (米)
+                              0.35  // 关键帧角度阈值 (rad, ~20°)
   );
   frontend->setMaxKeyFrames(5000);  // 位姿骨架全保留（~1.5MB）
   frontend->setMaxKfClouds(300);    // 只保留最近 300 帧点云（~19MB）
@@ -72,10 +72,13 @@ int main(int argc, char** argv) {
                 init_state.q = states.front().T.unit_quaternion();
                 init_state.p = V3d::Zero();
                 init_state.v = V3d::Zero();
+                init_state.bg = states.front().bg;
+                init_state.ba = states.front().ba;
                 init_state.timestamp = states.front().timestamp;
                 frontend->init(init_state);
                 init_done = true;
-                LOG(INFO) << "ESKF 用 IMU 重力对齐姿态初始化: q=" << init_state.q.coeffs().transpose();
+                LOG(INFO) << "ESKF 用 IMU 重力对齐姿态初始化: q=" << init_state.q.coeffs().transpose()
+                          << " bg=" << init_state.bg.transpose() << " ba=" << init_state.ba.transpose();
               }
             }
             time_sync.pushImu(imu_msg);
@@ -99,10 +102,8 @@ int main(int argc, char** argv) {
             }
 
             // 短期 IMU 递推
-            const auto& imu_queue = imu_processor.getStates();
-            std::vector<ImuState> imu_vec(imu_queue.begin(), imu_queue.end());
             double cloud_time = measures.lidar_end_time;
-            frontend->propagateFromTrustedPose(imu_vec, measures.imu_datas, cloud_time, config.g_norm);
+            frontend->propagateFromTrustedPose(measures.imu_datas, cloud_time, config.g_norm);
 
             frontend->process(deskew_cloud, config.save_map_path);
 
