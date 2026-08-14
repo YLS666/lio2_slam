@@ -114,6 +114,9 @@ class ESKF {
   V3d getPredictedPos() const { return p_; }
   V3d getPredictedVel() const { return v_; }
 
+  double getGyrNoise() const { return gyr_noise_density_; }
+  double getAccNoise() const { return acc_noise_density_; }
+
  private:
   Qd q_;                    // 名义姿态
   V3d p_;                   // 位置

@@ -1,10 +1,10 @@
-bag_file: /home/yls/data/slam_tools/bag/chery/rosbag2_2025_06_20-18_50_48_qirui/
+bag_file: /home/yls/data/slam_tools/bag/changfang/rosbag2_2026_05_07-16_30_57/
 
-save_map_path: /home/yls/data/slam_tools/map/map_0/
+save_map_path: /home/yls/data/slam_tools/map/map_0/test/
 
-imu_topic: /ns4/livox/imu_192_168_1_2
+imu_topic: /ns1/livox/imu_192_168_8_122
 
-lidar_topic: /ns4/livox/lidar_192_168_1_2
+lidar_topic: /ns1/livox/lidar_192_168_8_122
 
 odom_topic: /odom
 
@@ -18,3 +18,5 @@ t_imu_lidar: [ -0.011, -0.02329, 0.04412 ]
 r_imu_lidar: [ 1, 0, 0, 0, 1, 0, 0, 0, 1 ]
 
 g_norm: 9.80655
+
+is_use_imu: true

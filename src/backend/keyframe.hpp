@@ -17,6 +17,9 @@ struct KeyFrame {
 
   Eigen::Matrix<double, 6, 6> info_mat = Eigen::Matrix<double, 6, 6>::Identity();
 
+  int ndt_effective = 0;            // NDT 有效匹配点数
+  float ndt_rot_correction = 0.0f;  // NDT 对 IMU 旋转预测的修正量 (rad)
+
   V3d relative_p = V3d::Zero();
   Qd relative_q = Qd::Identity();
 

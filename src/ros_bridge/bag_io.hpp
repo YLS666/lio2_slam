@@ -2,16 +2,15 @@
 
 #include <functional>
 #include "config_def.hpp"
-#include "sensor_msgs/msg/imu.hpp"
-#include "sensor_msgs/msg/point_cloud2.hpp"
+#include "utils/ros_types.hpp"
 
 class BagIO {
  public:
   explicit BagIO(AllConfig& config);
 
-  void run(std::function<void(const sensor_msgs::msg::Imu&)> imu_callback,
+  void run(std::function<void(const Imu&)> imu_callback,
 
-           std::function<void(const sensor_msgs::msg::PointCloud2::SharedPtr&)> cloud_callback);
+           std::function<void(const PointCloud2SharedPtr&)> cloud_callback);
 
  private:
   std::string bag_path_;

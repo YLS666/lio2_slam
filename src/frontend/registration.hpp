@@ -1,75 +1,64 @@
 #pragma once
 
 #include "cloud_utils/point_type.hpp"
-#include "frontend/state.hpp"
 #include "frontend/voxel_map.hpp"
-#include "utils/eigen_types.hpp"
+#include "state.hpp"
 
-class Registration {
+class NDTRegistration {
  public:
-  Registration();
+  explicit NDTRegistration(int max_iteration = 5);
 
-  /**
-   * @brief 配准主函数 (点对点 + Huber 鲁棒核 + TBB 并行)
-   *
-   * @param cloud  当前帧特征点云
-   * @param map    局部地图
-   * @param state  位姿 (输入初值，输出优化后结果)
-   * @return true  配准成功
-   */
   bool align(const CloudPtr& cloud, VoxelMap* map, State& state);
 
   /**
-   * @brief 获取配准结果协方差 (6x6, 用于 ESKF 和关键帧)
+   * @brief 设置当前帧源点云
    */
+  void setSource(const CloudPtr& cloud) { source_ = cloud; }
+
+  /**
+   * @brief 对给定位姿计算 NDT 残差的信息形式 HᵀV⁻¹H 和 HᵀV⁻¹r
+   *
+   * 用于 IESKF::updateUsingCustomObserve 的回调。
+   * 每次 IEKF 迭代调用一次，用最新名义位姿重线性化。
+   *
+   * Jacobian J (3×18) 非零块:
+   *   J = [I₃, 0, A, 0, 0, 0]  其中 A = -R·skew(q_lidar)
+   *
+   * @param map         NDT 体素地图 (只读访问, 支持 TBB 并发读取)
+   * @param input_pose  当前 IEKF 名义位姿
+   * @param HTVH        [输出] HᵀV⁻¹H (18×18)
+   * @param HTVr        [输出] HᵀV⁻¹r (18×1)
+   * @return            有效匹配点数
+   */
+  int computeResidualAndJacobians(const VoxelMap* map, const SE3& input_pose, Eigen::Matrix<double, 18, 18>& HTVH,
+                                  Eigen::Matrix<double, 18, 1>& HTVr);
+
+  int matchCount() const { return match_count_; }
+
   Eigen::Matrix<double, 6, 6> getCovariance() const { return covariance_; }
 
-  /**
-   * @brief 获取内点数量 (权重 > 0.5 的点)
-   */
-  int getInlierCount() const { return inlier_count_; }
+  void setHuber(bool enable, double k) {
+    use_huber_ = enable;
+    huber_k_ = k;
+  }
 
-  /**
-   * @brief 获取总匹配点数
-   */
-  int getMatchCount() const { return match_count_; }
+  /** @brief 设置信息矩阵缩放系数 (对齐 slam_tools: 0.01) */
+  void setInfoRatio(double ratio) { info_ratio_ = ratio; }
 
-  /**
-   * @brief 设置 Huber 核参数 k
-   * @param k 阈值 (米), 默认 0.3
-   *          残差 > k 的点权重降低
-   */
-  void setHuberK(double k) { huber_k_ = k; }
-
-  /**
-   * @brief 启用/禁用 Huber 鲁棒核
-   */
-  void enableHuber(bool enable) { use_huber_ = enable; }
+  /** @brief 设置马氏距离离群阈值 (对齐 slam_tools: 5.0) */
+  void setOutlierThreshold(double th) { res_outlier_th_ = th; }
 
  private:
-  M3d skew(const Eigen::Vector3d& v);
+  double huberWeight(double error) const;
 
-  Eigen::Matrix<double, 6, 6> covariance_;  // 配准结果的协方差矩阵
-  int inlier_count_ = 0;                    // 配准结果的内点数
-  int match_count_ = 0;                     // 配准结果的匹配点数
-  double huber_k_ = 0.3;                    // Huber 鲁棒核的参数，默认 0.3m
-  bool use_huber_ = true;                   // 是否使用 Huber 鲁棒核
+  int max_iteration_;
+  bool use_huber_ = false;
+  double huber_k_ = 0.3;
+  double info_ratio_ = 0.01;     // HᵀV⁻¹H 缩放系数 (对齐 slam_tools)
+  double res_outlier_th_ = 5.0;  // 马氏距离离群阈值
 
-  /**
-   * @brief Huber 权重函数
-   *
-   *   w(r) = 1,          if |r| ≤ k
-   *   w(r) = k / |r|,    if |r| > k
-   *
-   * 当残差很大时权重很小，有效抑制动态物体/坑洼地面
-   */
-  double huberWeight(double residual, double k) const {
-    if (residual <= k) {
-      return 1.0;
-    }
-    // Huber 核函数: 对大残差降权
-    // 当残差为 2*k 时, 权重为 0.5
-    // 当残差为 4*k 时, 权重为 0.25
-    return k / residual;
-  }
+  int match_count_ = 0;
+  Eigen::Matrix<double, 6, 6> covariance_ = Eigen::Matrix<double, 6, 6>::Identity();
+
+  CloudPtr source_ = nullptr;
 };

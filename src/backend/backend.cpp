@@ -7,10 +7,12 @@
 #include "frontend/state.hpp"
 #include "utils/eigen_types.hpp"
 #include "utils/g2o_types.hpp"
+#include "utils/math_types.hpp"
 
 Backend::Backend() {}
 
-bool Backend::addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen::Matrix<double, 6, 6>& info_mat) {
+bool Backend::addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen::Matrix<double, 6, 6>& info_mat,
+                          int ndt_effective, float ndt_rot_correction) {
   // 第一帧
   if (keyframes_.empty()) {
     KeyFrame kf;
@@ -20,6 +22,8 @@ bool Backend::addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen
     kf.q = state.q;
     kf.cloud = cloud;
     kf.info_mat = info_mat;
+    kf.ndt_effective = ndt_effective;
+    kf.ndt_rot_correction = ndt_rot_correction;
     kf.relative_p.setZero();
     kf.relative_q.setIdentity();
     keyframes_.push_back(kf);
@@ -66,6 +70,8 @@ bool Backend::addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen
   kf.q = state.q;
   kf.cloud = cloud;
   kf.info_mat = info_mat;
+  kf.ndt_effective = ndt_effective;
+  kf.ndt_rot_correction = ndt_rot_correction;
 
   // 计算与前一帧的相对位姿 (用于图优化约束)
   kf.relative_q = last.q.inverse() * state.q;
@@ -117,201 +123,6 @@ bool Backend::addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen
   return true;
 }
 
-// bool Backend::slideWindowOptimize() {
-//   if (keyframes_.size() < 3) {
-//     return false;
-//   }
-
-//   // 提取滑动窗口内的关键帧 (最近 window_size_ 个)
-//   int start_idx = std::max(0, static_cast<int>(keyframes_.size()) - window_size_);
-//   int N = static_cast<int>(keyframes_.size()) - start_idx;
-
-//   if (N < 2) {
-//     return false;
-//   }
-
-//   // 1. 备份窗口内所有 KF 位姿（用于失败回滚)
-//   std::vector<V3d> backup_p(N);
-//   std::vector<Qd> backup_q(N);
-//   for (int i = 0; i < N; ++i) {
-//     backup_p[i] = keyframes_[start_idx + i].p;
-//     backup_q[i] = keyframes_[start_idx + i].q;
-//   }
-
-//   // 优化前 KF 位姿
-//   LOG(INFO) << "[SlideWindow] ====== 优化前 N=" << N << " start_idx=" << start_idx << " ======";
-//   for (int i = 0; i < N; ++i) {
-//     LOG(INFO) << "[SlideWindow] 优化前 kf#" << keyframes_[start_idx + i].id << " p=" << backup_p[i].transpose()
-//               << " q=" << backup_q[i].coeffs().transpose();
-//   }
-
-//   // 2. 构建优化问题
-//   std::unique_ptr<LinearSolver> linearSolver = std::make_unique<LinearSolver>();
-//   linearSolver->setBlockOrdering(false);
-//   std::unique_ptr<BlockSolver> blockSolver = std::make_unique<BlockSolver>(std::move(linearSolver));
-//   auto* algorithm = new g2o::OptimizationAlgorithmLevenberg(std::move(blockSolver));
-
-//   g2o::SparseOptimizer optimizer;
-//   optimizer.setAlgorithm(algorithm);
-//   optimizer.setVerbose(false);
-
-//   // 添加顶点
-//   std::vector<g2o::VertexSE3*> vertices(N);
-
-//   for (int i = 0; i < N; ++i) {
-//     auto* v = new g2o::VertexSE3();
-//     v->setId(i);
-
-//     Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
-//     T.rotate(keyframes_[start_idx + i].q.toRotationMatrix());
-//     T.pretranslate(keyframes_[start_idx + i].p);
-//     v->setEstimate(T);
-
-//     if (i == 0) {
-//       v->setFixed(true);
-//     }
-//     optimizer.addVertex(v);
-//     vertices[i] = v;
-//   }
-
-//   // 添加帧间约束边（i->i+1)
-//   for (int i = 0; i < N - 1; ++i) {
-//     const auto& kf_next = keyframes_[start_idx + i + 1];
-//     auto* edge = new g2o::EdgeSE3();
-//     edge->setVertex(0, vertices[i]);
-//     edge->setVertex(1, vertices[i + 1]);
-
-//     Eigen::Isometry3d T_rel = Eigen::Isometry3d::Identity();
-//     T_rel.rotate(kf_next.relative_q.toRotationMatrix());
-//     T_rel.pretranslate(kf_next.relative_p);
-//     edge->setMeasurement(T_rel);
-
-//     Eigen::Matrix<double, 6, 6> info = kf_next.info_mat;
-//     double det = info.determinant();
-//     if (det < 1e-12 || det > 1e18 || std::isnan(det) || std::isinf(det)) {
-//       LOG(WARNING) << "关键帧 " << kf_next.id << " 信息矩阵异常(det=" << det << "), 使用单位矩阵";
-//       info = Eigen::Matrix<double, 6, 6>::Identity();
-//     } else {
-//       // 限制信息矩阵的最大特征值，防止数值过大导致 g2o LM 步长失控
-//       Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 6, 6>> eig_info(info);
-//       double max_ev = eig_info.eigenvalues().maxCoeff();
-//       constexpr double MAX_INFO_EIGEN = 1e6;  // 限制信息矩阵最大特征值
-//       if (max_ev > MAX_INFO_EIGEN) {
-//         info *= MAX_INFO_EIGEN / max_ev;
-//         VLOG(1) << "关键帧 " << kf_next.id << " 信息矩阵特征值过大(" << max_ev << "), 已缩放";
-//       }
-//     }
-//     edge->setInformation(info);
-//     optimizer.addEdge(edge);
-//   }
-
-//   // 边的相对测量值
-//   for (int i = 0; i < N - 1; ++i) {
-//     const auto& kf_next = keyframes_[start_idx + i + 1];
-//     // 用备份位姿反算"应该的"相对变换，跟存储的 measurement 对比
-//     SE3 T_cur(backup_q[i], backup_p[i]);
-//     SE3 T_next(backup_q[i + 1], backup_p[i + 1]);
-//     SE3 T_rel_computed = T_cur.inverse() * T_next;
-//     V3d rel_p_computed = T_rel_computed.translation();
-//     V3d rel_p_stored = kf_next.relative_p;
-
-//     LOG(INFO) << "[SlideWindow] 边 " << keyframes_[start_idx + i].id << "→" << kf_next.id
-//               << " | 存储值 rel_p=" << rel_p_stored.transpose() << " | 备份反算 rel_p=" << rel_p_computed.transpose()
-//               << " | 差值=" << (rel_p_stored - rel_p_computed).norm() << "m"
-//               << " | info_det=" << kf_next.info_mat.determinant();
-//   }
-
-//   // 3. 优化
-//   optimizer.initializeOptimization();
-//   double chi2_initial = optimizer.chi2();
-
-//   // 初始解已是最优（所有边误差为零），跳过优化，避免 g2o 空转发散
-//   if (chi2_initial >= 0.0 && chi2_initial < 1e-6) {
-//     LOG(INFO) << "[SlideWindow] 初始 chi2=" << chi2_initial << " ≈0,已是最优解,跳过优化";
-//     return true;
-//   }
-
-//   optimizer.optimize(20);
-//   double chi2 = optimizer.chi2();
-
-//   // 4. 写回
-//   for (int i = 0; i < N; ++i) {
-//     Eigen::Isometry3d T = vertices[i]->estimate();
-//     keyframes_[start_idx + i].q = Eigen::Quaterniond(T.rotation()).normalized();
-//     keyframes_[start_idx + i].p = T.translation();
-//   }
-
-//   // 优化后 KF 位姿及变化量
-//   LOG(INFO) << "[SlideWindow] ====== 优化后 ======";
-//   for (int i = 0; i < N; ++i) {
-//     double dp = (keyframes_[start_idx + i].p - backup_p[i]).norm();
-//     double dtheta = 2.0 * std::acos(std::min(1.0, std::abs((backup_q[i].inverse() * keyframes_[start_idx +
-//     i].q).w()))); LOG(INFO) << "[SlideWindow] 优化后 kf#" << keyframes_[start_idx + i].id
-//               << " p=" << keyframes_[start_idx + i].p.transpose() << " | Δp=" << dp << "m Δθ=" << dtheta << "rad";
-//   }
-//   LOG(INFO) << "[SlideWindow] chi2=" << optimizer.chi2();
-
-//   // 5. 逐帧验证优化结果
-//   bool valid = true;
-//   for (int i = 0; i < N; ++i) {
-//     const auto& p_new = keyframes_[start_idx + i].p;
-//     const auto& q_new = keyframes_[start_idx + i].q;
-
-//     // NaN / Inf 检查
-//     if (!p_new.allFinite() || !q_new.coeffs().allFinite()) {
-//       LOG(ERROR) << "[SlideWindow] kf#" << keyframes_[start_idx + i].id << " 优化后位姿含 NaN/Inf!";
-//       valid = false;
-//       break;
-//     }
-
-//     // 单帧偏移量检查（相对备份）
-//     double dp = (p_new - backup_p[i]).norm();
-//     double dtheta = 2.0 * std::acos(std::min(1.0, std::abs((backup_q[i].inverse() * q_new).w())));
-
-//     if (dp > 5.0 || dtheta > 0.5) {
-//       LOG(ERROR) << "[SlideWindow] kf#" << keyframes_[start_idx + i].id << " 优化偏离过大: dp=" << dp
-//                  << "m, dθ=" << dtheta << "rad";
-//       valid = false;
-//       break;
-//     }
-//   }
-
-//   // chi2 异常检查
-//   if (valid && (std::isnan(chi2) || std::isinf(chi2) || chi2 < 0.0 || chi2 > 1e6)) {
-//     LOG(ERROR) << "[SlideWindow] chi2 异常: " << chi2;
-//     valid = false;
-//   }
-
-//   // 6. 异常则回滚所有窗口内 KF 位姿
-//   if (!valid) {
-//     for (int i = 0; i < N; ++i) {
-//       keyframes_[start_idx + i].p = backup_p[i];
-//       keyframes_[start_idx + i].q = backup_q[i];
-//     }
-//     LOG(WARNING) << "[SlideWindow] 优化异常，已回滚 " << N << " 个关键帧位姿";
-//     return false;
-//   }
-
-//   // 7. 成功：重算相对位姿
-//   for (int i = 0; i < N - 1; ++i) {
-//     const auto& kf_cur = keyframes_[start_idx + i];
-//     const auto& kf_next = keyframes_[start_idx + i + 1];
-//     // 重新计算相对位姿
-//     keyframes_[start_idx + i + 1].relative_q = kf_cur.q.inverse() * kf_next.q;
-//     M3d R_cur = kf_cur.q.toRotationMatrix();
-//     keyframes_[start_idx + i + 1].relative_p = R_cur.transpose() * (kf_next.p - kf_cur.p);
-//   }
-
-//   LOG(INFO) << "[SlideWindow] N=" << N << " start_idx=" << start_idx;
-//   for (int i = 0; i < N; ++i) {
-//     LOG(INFO) << "[SlideWindow] kf_id=" << keyframes_[start_idx + i].id
-//               << " p=" << keyframes_[start_idx + i].p.transpose();
-//   }
-
-//   LOG(INFO) << "滑动窗口优化完成, 帧数: " << N;
-//   return true;
-// }
-
 bool Backend::slideWindowOptimize() {
   if (keyframes_.size() < 3) {
     return false;
@@ -342,7 +153,7 @@ bool Backend::slideWindowOptimize() {
     double dp = (rel_p_computed - kf_next.relative_p).norm();
     double dtheta = 2.0 * std::acos(std::min(1.0, std::abs((kf_next.relative_q.inverse() * rel_q_computed).w())));
 
-    if (dp > 0.01 || dtheta > 0.001) {
+    if (dp > 0.01 || dtheta > 0.01) {
       // 不一致：用位姿本身重算 relative，维持后续一致性
       LOG(WARNING) << "[SlideWindow] 边 " << kf_cur.id << "→" << kf_next.id << " 不一致: rel_p 差值=" << dp
                    << "m, rel_q 差值=" << dtheta << "rad，以位姿为准重算";
@@ -403,7 +214,7 @@ void Backend::globalOptimize(const std::vector<LoopPair>& loop_pairs) {
 
     Eigen::Matrix<double, 6, 6> info = keyframes_[i + 1].info_mat;
     double det = info.determinant();
-    if (det < 1e-12 || det > 1e18 || std::isnan(det) || std::isinf(det)) {
+    if (det < 1e-12 || det > 1e18 || float_check::isnan(det) || float_check::isinf(det)) {
       LOG(WARNING) << "关键帧 " << keyframes_[i + 1].id << " 信息矩阵异常(det=" << det << "), 使用单位矩阵";
       info = Eigen::Matrix<double, 6, 6>::Identity();
     } else {

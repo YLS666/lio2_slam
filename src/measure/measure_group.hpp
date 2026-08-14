@@ -10,6 +10,6 @@ struct MeasureGroup {
   double lidar_end_time = 0.0;
 
   FullCloudPtr lidar;
-  std::deque<sensor_msgs::msg::Imu> imu_datas;
+  std::deque<Imu> imu_datas;
   std::vector<ImuState> imu_states;
 };

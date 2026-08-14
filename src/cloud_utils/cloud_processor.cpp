@@ -5,18 +5,14 @@
 #include <tbb/blocked_range.h>
 #include <tbb/parallel_for.h>
 #include <chrono>
-#include <sensor_msgs/msg/point_cloud2.hpp>
-#include <sensor_msgs/point_cloud2_iterator.hpp>
-
-template <typename MessageT>
-using PointCloud2ConstIterator = sensor_msgs::PointCloud2ConstIterator<MessageT>;
+#include "utils/math_types.hpp"
 
 CloudProcessor::CloudProcessor(AllConfig& config) {
   q_il_ = vecToMat(config.r_imu_lidar).normalized();
   t_il_ = V3d(config.t_imu_lidar.data());
 }
 
-void CloudProcessor::pre_process(const sensor_msgs::msg::PointCloud2::SharedPtr& cloud, FullCloudPtr& out_cloud) {
+void CloudProcessor::pre_process(const PointCloud2SharedPtr& cloud, FullCloudPtr& out_cloud) {
   try {
     PointCloud2ConstIterator<float> iter_x(*cloud, "x");
     PointCloud2ConstIterator<float> iter_y(*cloud, "y");
@@ -54,14 +50,14 @@ void CloudProcessor::pre_process(const sensor_msgs::msg::PointCloud2::SharedPtr&
       ++iter_t;
 
       // 过滤异常点（NAN）
-      if (!std::isfinite(new_pt.x) || !std::isfinite(new_pt.y) || !std::isfinite(new_pt.z)) {
+      if (!float_check::isfinite(new_pt.x) || !float_check::isfinite(new_pt.y) || !float_check::isfinite(new_pt.z)) {
         continue;
       }
 
       // 过滤雷达高度以下的点
-      if (new_pt.z < 0) {
-        continue;
-      }
+      // if (new_pt.z < 0) {
+      //   continue;
+      // }
 
       // 略掉过近的点
       if (new_pt.getVector3fMap().norm() < 0.5) {

@@ -2,9 +2,9 @@
 
 #include <deque>
 
-#include <sensor_msgs/msg/imu.hpp>
 #include "config_def.hpp"
 #include "utils/eigen_types.hpp"
+#include "utils/ros_types.hpp"
 
 struct ImuState {
   double timestamp = 0.0;
@@ -19,7 +19,7 @@ class ImuProcessor {
  public:
   explicit ImuProcessor(AllConfig& config);
 
-  bool processImu(const sensor_msgs::msg::Imu& imu);
+  bool processImu(const Imu& imu);
 
   ImuState interpolate(double t) const;
 
@@ -65,4 +65,5 @@ class ImuProcessor {
   V3d last_gyr_;
   V3d last_acc_;
   bool has_last_imu_ = false;
+  double last_valid_timestamp_ = 0.0;  // 最后一次合法 IMU 的时间戳
 };

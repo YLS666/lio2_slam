@@ -12,6 +12,9 @@ using M2d = Eigen::Matrix2d;
 using M3d = Eigen::Matrix3d;
 using M4d = Eigen::Matrix4d;
 
+using Mat18d = Eigen::Matrix<double, 18, 18>;
+using Vec18d = Eigen::Matrix<double, 18, 1>;
+
 using VXf = Eigen::VectorXf;
 using V2f = Eigen::Vector2f;
 using V3f = Eigen::Vector3f;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <pcl/filters/voxel_grid.h>
 #include <pcl/impl/point_types.hpp>
 #define PCL_NO_PRECOMPILE
 
@@ -27,3 +28,13 @@ using CloudPtr = PointCloudType::Ptr;
 
 using FullCloudPointType = pcl::PointCloud<FullPointType>;
 using FullCloudPtr = FullCloudPointType::Ptr;
+
+inline CloudPtr dsCloud(const CloudPtr& cloud, float voxel_size) {
+  CloudPtr ds(new PointCloudType());
+  ds->reserve(cloud->size());
+  pcl::VoxelGrid<PointType> voxel;
+  voxel.setInputCloud(cloud);
+  voxel.setLeafSize(voxel_size, voxel_size, voxel_size);
+  voxel.filter(*ds);
+  return ds;
+}

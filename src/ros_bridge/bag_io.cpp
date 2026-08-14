@@ -1,6 +1,5 @@
 #include "bag_io.hpp"
 #include <pcl_conversions/pcl_conversions.h>
-#include <sensor_msgs/msg/detail/point_cloud2__struct.hpp>
 #include "rclcpp/serialization.hpp"
 #include "rclcpp/serialized_message.hpp"
 #include "rosbag2_cpp/reader.hpp"
@@ -11,9 +10,9 @@ BagIO::BagIO(AllConfig& config) {
   lidar_topic_ = config.lidar_topic;
 }
 
-void BagIO::run(std::function<void(const sensor_msgs::msg::Imu&)> imu_callback,
+void BagIO::run(std::function<void(const Imu&)> imu_callback,
 
-                std::function<void(const sensor_msgs::msg::PointCloud2::SharedPtr&)> cloud_callback) {
+                std::function<void(const PointCloud2SharedPtr&)> cloud_callback) {
   rosbag2_cpp::Reader reader;
 
   reader.open(bag_path_);
@@ -24,9 +23,9 @@ void BagIO::run(std::function<void(const sensor_msgs::msg::Imu&)> imu_callback,
     if (msg->topic_name == imu_topic_) {
       rclcpp::SerializedMessage serialized_msg(*msg->serialized_data);
 
-      sensor_msgs::msg::Imu imu_msg;
+      Imu imu_msg;
 
-      rclcpp::Serialization<sensor_msgs::msg::Imu> serializer;
+      rclcpp::Serialization<Imu> serializer;
 
       serializer.deserialize_message(&serialized_msg, &imu_msg);
 
@@ -36,13 +35,13 @@ void BagIO::run(std::function<void(const sensor_msgs::msg::Imu&)> imu_callback,
     else if (msg->topic_name == lidar_topic_) {
       rclcpp::SerializedMessage serialized_msg(*msg->serialized_data);
 
-      sensor_msgs::msg::PointCloud2 cloud_msg;
+      PointCloud2 cloud_msg;
 
-      rclcpp::Serialization<sensor_msgs::msg::PointCloud2> serializer;
+      rclcpp::Serialization<PointCloud2> serializer;
 
       serializer.deserialize_message(&serialized_msg, &cloud_msg);
 
-      auto cloud = std::make_shared<sensor_msgs::msg::PointCloud2>(cloud_msg);
+      auto cloud = std::make_shared<PointCloud2>(cloud_msg);
 
       cloud_callback(cloud);
     }
