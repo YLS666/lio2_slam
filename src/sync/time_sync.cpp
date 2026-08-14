@@ -4,7 +4,7 @@
 
 TimeSync::TimeSync(ImuProcessor* imu_processor) : imu_processor_(imu_processor) {}
 
-void TimeSync::pushImu(const sensor_msgs::msg::Imu& imu) {
+void TimeSync::pushImu(const Imu& imu) {
   imu_buffer_.push_back(imu);
 
   if (imu_buffer_.size() > 20000) {
@@ -32,8 +32,8 @@ bool TimeSync::syncMeasure(MeasureGroup& measures) {
     return false;
   }
 
-  double lidar_begin_time = cloud->header.stamp * 1e-9 + cloud->points.front().timestamp;  // s
-  double lidar_end_time = cloud->header.stamp * 1e-9 + cloud->points.back().timestamp;
+  double lidar_begin_time = static_cast<double>(cloud->header.stamp) * 1e-9 + cloud->points.front().timestamp;  // s
+  double lidar_end_time = static_cast<double>(cloud->header.stamp) * 1e-9 + cloud->points.back().timestamp;
 
   if (imu_buffer_.empty()) {
     return false;

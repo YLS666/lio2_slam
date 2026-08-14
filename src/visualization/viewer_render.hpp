@@ -5,7 +5,6 @@
 #include <pangolin/pangolin.h>
 
 #include "cloud_utils/point_type.hpp"
-#include "utils/eigen_types.hpp"
 #include "visualization/viewer_types.hpp"
 
 namespace viewer {

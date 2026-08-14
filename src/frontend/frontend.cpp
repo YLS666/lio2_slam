@@ -75,6 +75,8 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
   reg_->setSource(feature_cloud);
   int effective_points = 0;
 
+  SE3 pre_pose = ieskf_->getNominalSE3();
+
   auto tic = std::chrono::steady_clock::now();
   bool reg_success = ieskf_->updateUsingCustomObserve(
       [this, &effective_points](const SE3& input_pose, Eigen::Matrix<double, 18, 18>& HTVH,
@@ -129,6 +131,10 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
     state_.timestamp = state_ts;
   }
 
+  // NDT 对 IMU 旋转预测的修正量
+  SE3 post_pose = ieskf_->getNominalSE3();
+  float ndt_rot_correction = static_cast<float>((pre_pose.inverse() * post_pose).so3().log().norm());
+
   LOG(INFO) << "[Process] p=" << state_.p.transpose() << " v=" << state_.v.transpose()
             << " bg=" << state_.bg.transpose() << " ba=" << state_.ba.transpose() << " g=" << state_.g.transpose()
             << " effective=" << effective_points << " reg_ms=" << reg_ms;
@@ -155,7 +161,7 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
   }
 
   // 6. 后端关键帧管理
-  bool is_keyframe = backend_->addKeyFrame(state_, feature_cloud, info_mat);
+  bool is_keyframe = backend_->addKeyFrame(state_, feature_cloud, info_mat, effective_points, ndt_rot_correction);
 
   if (is_keyframe) {
     // 保存关键帧点云
@@ -353,6 +359,10 @@ void Frontend::mergeOptimizedKeyframesToMap() {
     return;
   }
 
+  constexpr float kNormalRadius = 0.5f;    // 正常
+  constexpr float kModerateRadius = 1.0f;  // 中等退化
+  constexpr float kSevereRadius = 1.5f;    // 严重退化
+
   std::vector<int> merged_ids;
   for (size_t i = 0; i < kfs.size(); ++i) {
     const auto& kf = kfs[i];
@@ -361,6 +371,40 @@ void Frontend::mergeOptimizedKeyframesToMap() {
     }
     if (!kf.cloud || kf.cloud->empty()) {
       continue;
+    }
+
+    // ---- 退化信号 ----
+    double ang_vel = 0.0;
+    if (i > 0) {
+      const auto& prev_kf = kfs[i - 1];
+      double dt = kf.timestamp - prev_kf.timestamp;
+      if (dt > 0.01) {
+        Qd delta_q = prev_kf.q.inverse() * kf.q;
+        double angle = 2.0 * std::acos(std::min(1.0, std::abs(delta_q.w())));
+        ang_vel = angle / dt;
+      }
+    }
+
+    bool low_ndt = (kf.ndt_effective > 0 && kf.ndt_effective < 300);
+    bool rotation_unconstrained = (ang_vel > 0.3) && (kf.ndt_rot_correction > 1e-6f) && (kf.ndt_rot_correction < 0.03f);
+    bool very_fast = (ang_vel > 0.5);
+
+    float radius;
+    const char* level;
+    if (low_ndt || very_fast) {
+      radius = kSevereRadius;  // 1.5m — 最保守，只加真正的新几何
+      level = "严重";
+    } else if (rotation_unconstrained) {
+      radius = kModerateRadius;  // 1.0m — 过滤重复，但新墙体仍能进入
+      level = "旋转无约束";
+    } else {
+      radius = kNormalRadius;  // 0.5m — 正常
+      level = nullptr;
+    }
+
+    if (level) {
+      LOG(INFO) << "[MapMerge] KF#" << kf.id << " " << level << " (ang=" << ang_vel
+                << " ndtDR=" << kf.ndt_rot_correction << " eff=" << kf.ndt_effective << ") →半径 " << radius;
     }
 
     CloudPtr world_cloud(new PointCloudType());
@@ -372,14 +416,14 @@ void Frontend::mergeOptimizedKeyframesToMap() {
     CloudPtr new_cloud(new PointCloudType());
     new_cloud->reserve(world_cloud->size());
     for (const auto& pt : world_cloud->points) {
-      if (!map_->hasNearbyCell(pt, 0.5f, NearbyType::CENTER)) {
+      if (!map_->hasNearbyCell(pt, radius, NearbyType::CENTER)) {
         new_cloud->push_back(pt);
       }
     }
 
     map_->addCloud(new_cloud);
     merged_ids.push_back(kf.id);
-    LOG(INFO) << "[MapMerge] KF#" << kf.id << " 添加 " << new_cloud->size() << " 点, 地图总数: " << map_->size();
+    LOG(INFO) << "[MapMerge] KF#" << kf.id << " +" << new_cloud->size() << "点, 地图体素:" << map_->size();
   }
 
   if (!merged_ids.empty()) {
@@ -419,8 +463,7 @@ void Frontend::rebuildMapFromKeyframes() {
   }
 }
 
-void Frontend::propagateFromTrustedPose(const std::deque<sensor_msgs::msg::Imu>& imu_datas, double cloud_time,
-                                        double g_norm) {
+void Frontend::propagateFromTrustedPose(const std::deque<Imu>& imu_datas, double cloud_time, double g_norm) {
   if (!initialized_ || imu_datas.size() < 2) {
     return;
   }

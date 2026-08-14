@@ -52,7 +52,8 @@ class Backend {
    * @param info_mat 信息矩阵(6x6)
    * @return true    创建了新关键帧
    */
-  bool addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen::Matrix<double, 6, 6>& info_mat);
+  bool addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen::Matrix<double, 6, 6>& info_mat,
+                   int ndt_effective = 0, float ndt_rot_correction = 0.0f);
 
   /**
    * @brief 滑动窗口优化

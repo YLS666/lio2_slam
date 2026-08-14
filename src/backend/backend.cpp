@@ -7,10 +7,12 @@
 #include "frontend/state.hpp"
 #include "utils/eigen_types.hpp"
 #include "utils/g2o_types.hpp"
+#include "utils/math_types.hpp"
 
 Backend::Backend() {}
 
-bool Backend::addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen::Matrix<double, 6, 6>& info_mat) {
+bool Backend::addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen::Matrix<double, 6, 6>& info_mat,
+                          int ndt_effective, float ndt_rot_correction) {
   // 第一帧
   if (keyframes_.empty()) {
     KeyFrame kf;
@@ -20,6 +22,8 @@ bool Backend::addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen
     kf.q = state.q;
     kf.cloud = cloud;
     kf.info_mat = info_mat;
+    kf.ndt_effective = ndt_effective;
+    kf.ndt_rot_correction = ndt_rot_correction;
     kf.relative_p.setZero();
     kf.relative_q.setIdentity();
     keyframes_.push_back(kf);
@@ -66,6 +70,8 @@ bool Backend::addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen
   kf.q = state.q;
   kf.cloud = cloud;
   kf.info_mat = info_mat;
+  kf.ndt_effective = ndt_effective;
+  kf.ndt_rot_correction = ndt_rot_correction;
 
   // 计算与前一帧的相对位姿 (用于图优化约束)
   kf.relative_q = last.q.inverse() * state.q;
@@ -208,7 +214,7 @@ void Backend::globalOptimize(const std::vector<LoopPair>& loop_pairs) {
 
     Eigen::Matrix<double, 6, 6> info = keyframes_[i + 1].info_mat;
     double det = info.determinant();
-    if (det < 1e-12 || det > 1e18 || std::isnan(det) || std::isinf(det)) {
+    if (det < 1e-12 || det > 1e18 || float_check::isnan(det) || float_check::isinf(det)) {
       LOG(WARNING) << "关键帧 " << keyframes_[i + 1].id << " 信息矩阵异常(det=" << det << "), 使用单位矩阵";
       info = Eigen::Matrix<double, 6, 6>::Identity();
     } else {

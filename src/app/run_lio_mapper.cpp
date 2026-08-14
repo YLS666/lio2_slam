@@ -9,6 +9,7 @@
 #include "ros_bridge/bag_io.hpp"
 #include "sync/time_sync.hpp"
 #include "utils/eigen_types.hpp"
+#include "utils/ros_types.hpp"
 
 int main(int argc, char** argv) {
   (void)argc;
@@ -62,7 +63,7 @@ int main(int argc, char** argv) {
 
   try {
     bag.run(
-        [&](const sensor_msgs::msg::Imu& imu_msg) {
+        [&](const Imu& imu_msg) {
           if (imu_processor.processImu(imu_msg)) {
             static bool init_done = false;
             if (!init_done && !frontend->isInitialized()) {
@@ -84,7 +85,7 @@ int main(int argc, char** argv) {
             time_sync.pushImu(imu_msg);
           }
         },
-        [&](const sensor_msgs::msg::PointCloud2::SharedPtr& cloud) {
+        [&](const PointCloud2SharedPtr& cloud) {
           pcl::PointCloud<FullPointType>::Ptr out_cloud(new pcl::PointCloud<FullPointType>());
           cloud_processor.pre_process(cloud, out_cloud);
           time_sync.pushCloud(out_cloud);

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <memory>
-#include <sensor_msgs/msg/imu.hpp>
 #include "backend/backend.hpp"
 #include "cloud_utils/point_type.hpp"
 #include "config_def.hpp"
@@ -9,8 +8,8 @@
 #include "frontend/registration.hpp"
 #include "frontend/state.hpp"
 #include "frontend/voxel_map.hpp"
-#include "imu_utils/imu_processor.hpp"
 #include "loop_closure/loop_closure.hpp"
+#include "utils/ros_types.hpp"
 #include "visualization/pangolin_viewer.hpp"
 
 class Frontend {
@@ -58,7 +57,7 @@ class Frontend {
    * @param cloud_time  当前点云帧的时间戳
    * @param g_norm      重力范数 (IESKF 内部估计 g, 此参数仅用于 IMU 消息的 g→m/s² 转换)
    */
-  void propagateFromTrustedPose(const std::deque<sensor_msgs::msg::Imu>& imu_datas, double cloud_time, double g_norm);
+  void propagateFromTrustedPose(const std::deque<Imu>& imu_datas, double cloud_time, double g_norm);
 
   /**
    * @brief NDT + IESKF 配准 (每帧点云数据调用)

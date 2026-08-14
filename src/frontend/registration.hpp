@@ -8,10 +8,7 @@ class NDTRegistration {
  public:
   explicit NDTRegistration(int max_iteration = 5);
 
-  // ====== 旧接口: 独立 NDT 优化 (保留兼容性, 不再被主流程调用) ======
   bool align(const CloudPtr& cloud, VoxelMap* map, State& state);
-
-  // ====== 新接口: IEKF 观测回调 ======
 
   /**
    * @brief 设置当前帧源点云

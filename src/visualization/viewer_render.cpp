@@ -1,7 +1,4 @@
 #include "visualization/viewer_render.hpp"
-
-#include <Eigen/Dense>
-
 #include "visualization/viewer_gl_utils.hpp"
 
 namespace viewer {
@@ -79,7 +76,8 @@ void DrawTrajectory(const std::deque<TrajPoint>& trajectory) {
 
     glColor3f(alpha, 0.0f, 0.0f);
 
-    auto p = SlamToGL(trajectory[i].p.x(), trajectory[i].p.y(), trajectory[i].p.z());
+    auto p = SlamToGL(static_cast<float>(trajectory[i].p.x()), static_cast<float>(trajectory[i].p.y()),
+                      static_cast<float>(trajectory[i].p.z()));
 
     glVertex3f(p.x(), p.y(), p.z());
   }
@@ -90,7 +88,7 @@ void DrawTrajectory(const std::deque<TrajPoint>& trajectory) {
 
   glPushMatrix();
 
-  auto pos = SlamToGL(last.p.x(), last.p.y(), last.p.z());
+  auto pos = SlamToGL(static_cast<float>(last.p.x()), static_cast<float>(last.p.y()), static_cast<float>(last.p.z()));
 
   glTranslatef(pos.x(), pos.y(), pos.z());
 

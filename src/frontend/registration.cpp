@@ -2,6 +2,7 @@
 #include <glog/logging.h>
 #include <tbb/tbb.h>
 #include "utils/eigen_types.hpp"
+#include "utils/math_types.hpp"
 
 NDTRegistration::NDTRegistration(int max_iteration) : max_iteration_(max_iteration) {}
 
@@ -12,7 +13,6 @@ double NDTRegistration::huberWeight(double e) const {
   return huber_k_ / e;
 }
 
-// ====== 旧接口: 独立 NDT 优化 (保留兼容, 不再被 process() 调用) ======
 bool NDTRegistration::align(const CloudPtr& cloud, VoxelMap* map, State& state) {
   if (map == nullptr || map->size() < 100) {
     LOG(WARNING) << "NDT map too small";
@@ -58,7 +58,7 @@ bool NDTRegistration::align(const CloudPtr& cloud, VoxelMap* map, State& state) 
 
             V3d e = pw - cell.mean;
             double maha = e.transpose() * cell.info * e;
-            if (std::isnan(maha) || maha > res_outlier_th_) {
+            if (float_check::isnan(maha) || maha > res_outlier_th_) {
               continue;
             }
 
@@ -219,7 +219,7 @@ int NDTRegistration::computeResidualAndJacobians(const VoxelMap* map, const SE3&
 
         // 马氏距离离群检测
         double maha = e.transpose() * cell.info * e;
-        if (std::isnan(maha) || maha > outlier_th) {
+        if (float_check::isnan(maha) || maha > outlier_th) {
           continue;
         }
 
