@@ -2,13 +2,10 @@
 
 #include "cloud_utils/point_type.hpp"
 #include "frontend/voxel_map.hpp"
-#include "state.hpp"
 
 class NDTRegistration {
  public:
   explicit NDTRegistration(int max_iteration = 5);
-
-  bool align(const CloudPtr& cloud, VoxelMap* map, State& state);
 
   /**
    * @brief 设置当前帧源点云
