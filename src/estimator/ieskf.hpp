@@ -100,6 +100,9 @@ class IESKF {
   /** @brief 获取重力向量 */
   V3d getGravity() const { return g_; }
 
+  /** @brief 设置重力范数约束值 (修复 g 范数漂移) */
+  void setGravityNorm(double g) { g_norm_ = g; }
+
   /** @brief 获取在线估计的 bias */
   V3d getBg() const { return bg_; }
   V3d getBa() const { return ba_; }
@@ -121,6 +124,7 @@ class IESKF {
   V3d bg_ = V3d::Zero();
   V3d ba_ = V3d::Zero();
   V3d g_{0, 0, -9.80665};
+  double g_norm_ = 9.80665;  // 重力范数约束值
 
   // 误差状态
   Eigen::Matrix<double, 18, 1> dx_ = Eigen::Matrix<double, 18, 1>::Zero();

@@ -31,6 +31,7 @@ Frontend::Frontend(AllConfig config)
   ieskf_opt.update_ba_ = true;    // ba 在线估计
   // 注意: g_ (重力向量) 总是会被更新, 这是修复 Z 轴漂移的关键
   ieskf_ = std::make_unique<IESKF>(ieskf_opt);
+  ieskf_->setGravityNorm(config.g_norm);  // 重力范数约束值
 
   // 后端(只负责关键帧管理)
   backend_ = std::make_unique<Backend>();
@@ -342,7 +343,8 @@ void Frontend::mergeOptimizedKeyframesToMap() {
   }
 }
 
-void Frontend::propagateFromTrustedPose(const std::deque<Imu>& imu_datas, double cloud_time, double g_norm) {
+void Frontend::propagateFromTrustedPose(const std::deque<Imu>& imu_datas, double cloud_time, double g_norm,
+                                        double acc_scale) {
   if (!initialized_ || imu_datas.size() < 2) {
     return;
   }
@@ -385,8 +387,8 @@ void Frontend::propagateFromTrustedPose(const std::deque<Imu>& imu_datas, double
     V3d acc1(imu1.linear_acceleration.x, imu1.linear_acceleration.y, imu1.linear_acceleration.z);
 
     // g → m/s²
-    acc0 *= g_norm;
-    acc1 *= g_norm;
+    acc0 *= g_norm * acc_scale;
+    acc1 *= g_norm * acc_scale;
 
     // 中值积分
     V3d gyr_mid = 0.5 * (gyr0 + gyr1);

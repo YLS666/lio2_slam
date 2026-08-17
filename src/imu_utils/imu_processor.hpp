@@ -27,6 +27,9 @@ class ImuProcessor {
 
   const std::deque<ImuState>& getStates() const { return states_; }
 
+  /** @brief 获取加速度计放缩校准系数 (初始化时估计) */
+  double getAccScale() const { return acc_scale_; }
+
   // online update interface
   void updateBias(const V3d& bg, const V3d& ba);
 

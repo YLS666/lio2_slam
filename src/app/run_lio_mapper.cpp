@@ -104,7 +104,8 @@ int main(int argc, char** argv) {
 
             // 短期 IMU 递推
             double cloud_time = measures.lidar_end_time;
-            frontend->propagateFromTrustedPose(measures.imu_datas, cloud_time, config.g_norm);
+            frontend->propagateFromTrustedPose(measures.imu_datas, cloud_time, config.g_norm,
+                                               imu_processor.getAccScale());
 
             frontend->process(deskew_cloud, config.save_map_path);
 

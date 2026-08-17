@@ -192,6 +192,11 @@ void IESKF::update() {
     ba_ += dx_.segment<3>(12);
   }
   g_ += dx_.segment<3>(15);
+
+  // 重力范数约束: 只允许方向变化, 保持 |g| = g_norm
+  if (g_norm_ > 0.0 && g_.norm() > 1e-9) {
+    g_ *= g_norm_ / g_.norm();
+  }
 }
 
 State IESKF::getNominalState() const {

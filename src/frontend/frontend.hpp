@@ -55,8 +55,10 @@ class Frontend {
    * @param imu_datas   原始 IMU 消息队列
    * @param cloud_time  当前点云帧的时间戳
    * @param g_norm      重力范数 (IESKF 内部估计 g, 此参数仅用于 IMU 消息的 g→m/s² 转换)
+   * @param acc_scale   放缩系数
    */
-  void propagateFromTrustedPose(const std::deque<Imu>& imu_datas, double cloud_time, double g_norm);
+  void propagateFromTrustedPose(const std::deque<Imu>& imu_datas, double cloud_time, double g_norm,
+                                double acc_scale = 1.0);
 
   /**
    * @brief NDT + IESKF 配准 (每帧点云数据调用)
