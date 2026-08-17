@@ -138,11 +138,18 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
   bool is_keyframe = backend_->addKeyFrame(state_, feature_cloud, info_mat, effective_points, ndt_rot_correction);
 
   if (is_keyframe) {
-    // 保存关键帧点云 + 位姿 (供离线优化/回环模块使用)
+    // 保存关键帧点云 + 位姿
     if (!kf_save_dir.empty()) {
-      if (!std::filesystem::exists(kf_save_dir)) {
+      // 每次程序运行只清空一次目录，避免上一次运行残留的数据混入
+      static bool kf_dir_cleared = false;
+      if (!kf_dir_cleared) {
+        if (std::filesystem::exists(kf_save_dir)) {
+          std::filesystem::remove_all(kf_save_dir);
+        }
         std::filesystem::create_directories(kf_save_dir);
+        kf_dir_cleared = true;
       }
+
       const auto& kfs = backend_->getKeyFrames();
       const auto& kf = kfs.back();
 
