@@ -21,12 +21,11 @@ struct LoopPair {
 };
 
 /**
- * 后端优化模块
+ * 后端关键帧管理模块
  *
  * 功能:
  *   1. 关键帧管理: 基于距离/角度/时间间隔选取关键帧
- *   2. 滑动窗口优化: 维护最近 N 个关键帧的位姿图
- *   3. 全局优化: 当回环检测触发时, 进行全局位姿图优化
+ *   2. 分级内存管理: 释放已合并关键帧点云 / 淘汰超限旧关键帧
  */
 class Backend {
  public:
@@ -54,21 +53,6 @@ class Backend {
    */
   bool addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen::Matrix<double, 6, 6>& info_mat,
                    int ndt_effective = 0, float ndt_rot_correction = 0.0f);
-
-  /**
-   * @brief 滑动窗口优化
-   *
-   * 维护最近 window_size_ 个关键帧:
-   *   - 第1帧固定 (边缘化约束)
-   *   - 其余帧的位姿优化
-   *   - 使用帧间相对约束作为测量
-   *
-   * @return true  优化成功
-   * @return false 优化异常，已自动回滚窗口内 KF 位姿
-   */
-  bool slideWindowOptimize();
-
-  void globalOptimize(const std::vector<LoopPair>& loop_pairs);
 
   /**
    * @brief 获取关键帧列表

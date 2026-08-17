@@ -5,6 +5,8 @@
 #include <pcl/io/pcd_io.h>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include "cloud_utils/point_type.hpp"
 
 Frontend::Frontend(AllConfig config)
@@ -30,10 +32,8 @@ Frontend::Frontend(AllConfig config)
   // 注意: g_ (重力向量) 总是会被更新, 这是修复 Z 轴漂移的关键
   ieskf_ = std::make_unique<IESKF>(ieskf_opt);
 
-  // 后端 & 回环
+  // 后端(只负责关键帧管理)
   backend_ = std::make_unique<Backend>();
-  loop_closure_ = std::make_unique<LoopClosure>();
-  loop_closure_->setKeyframesPtr(&backend_->getKeyFrames());
 
   // 可视化
   viewer_ = std::make_unique<PangolinViewer>();
@@ -91,38 +91,11 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
   // 3. 配准失败处理
   if (!reg_success) {
     LOG(ERROR) << "NDT+IEKF 配准失败! effective=" << effective_points;
-    if (pending_rebuild_) {
-      consecutive_stable_ = 0;
-      LOG(WARNING) << "[LoopClosure] 配准失败, 重置稳定计数器";
-    }
     diverged_ = true;
     last_reg_success_ = false;
     return state_;
   }
   last_reg_success_ = true;
-
-  // 回环滞后应用: 全局优化后等连续 N 帧配准成功, 再平滑接入
-  if (pending_rebuild_) {
-    consecutive_stable_++;
-    if (consecutive_stable_ >= kPendingRebuildThreshold) {
-      const auto& kfs = backend_->getKeyFrames();
-      if (!kfs.empty()) {
-        const auto& last_kf = kfs.back();
-        double pos_diff = (last_kf.p - state_.p).norm();
-        double angle_diff = 2.0 * std::acos(std::min(1.0, std::abs((state_.q.inverse() * last_kf.q).w())));
-        LOG(INFO) << "[LoopClosure] 应用优化结果, 位姿偏差: dp=" << pos_diff << "m, dθ=" << angle_diff << "rad";
-        state_.p = last_kf.p;
-        state_.q = last_kf.q;
-        resetESKFWithOptimizedPose(state_);
-      }
-      rebuildMapFromKeyframes();
-      pending_rebuild_ = false;
-      consecutive_stable_ = 0;
-      LOG(INFO) << "[LoopClosure] 回环优化已应用, 地图已重建";
-    } else {
-      LOG(INFO) << "[LoopClosure] 稳定帧 " << consecutive_stable_ << "/" << kPendingRebuildThreshold;
-    }
-  }
 
   // 4. 获取更新后的全量状态
   double state_ts = state_.timestamp;
@@ -164,45 +137,43 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
   bool is_keyframe = backend_->addKeyFrame(state_, feature_cloud, info_mat, effective_points, ndt_rot_correction);
 
   if (is_keyframe) {
-    // 保存关键帧点云
+    // 保存关键帧点云 + 位姿 (供离线优化/回环模块使用)
     if (!kf_save_dir.empty()) {
       if (!std::filesystem::exists(kf_save_dir)) {
         std::filesystem::create_directories(kf_save_dir);
       }
       const auto& kfs = backend_->getKeyFrames();
-      std::string kf_path = kf_save_dir + "kf_" + std::to_string(kfs.back().id) + ".pcd";
+      const auto& kf = kfs.back();
+
+      std::string kf_path = kf_save_dir + "kf_" + std::to_string(kf.id) + ".pcd";
       pcl::io::savePCDFileBinary(kf_path, *feature_cloud);
-      LOG(INFO) << "保存关键帧点云: " << kf_path;
-    }
 
-    int kf_count = backend_->getKeyframeCount();
-    if (kf_count < 3) {
-      LOG(INFO) << "[KF] kf_count=" << kf_count << " (<3)，累积关键帧，暂不优化";
-      mergeOptimizedKeyframesToMap();
-    } else {
-      bool opt_ok = backend_->slideWindowOptimize();
-      if (opt_ok) {
-        const auto& kfs = backend_->getKeyFrames();
-        if (!kfs.empty()) {
-          const auto& last_kf = kfs.back();
-          double pos_diff = (last_kf.p - state_.p).norm();
-          double angle_diff = 2.0 * std::acos(std::min(1.0, std::abs((state_.q.inverse() * last_kf.q).w())));
-
-          if (pos_diff < 1.0 || angle_diff < 0.2) {
-            state_.p = last_kf.p;
-            state_.q = last_kf.q;
-            resetESKFWithOptimizedPose(state_);
-            LOG(INFO) << "滑窗优化更新位姿，IESKF 已重置: dp=" << pos_diff << "m, dθ=" << angle_diff << "rad";
-          } else {
-            LOG(WARNING) << "滑窗优化结果偏离过大，拒绝更新: dp=" << pos_diff << "m, dθ=" << angle_diff << "rad";
+      // 追加关键帧位姿到文本文件 (每行: id timestamp px py pz qx qy qz qw i00..i55)
+      std::string pose_path = kf_save_dir + "keyframe_poses.txt";
+      bool write_header = !std::filesystem::exists(pose_path);
+      std::ofstream fout(pose_path, std::ios::app);
+      if (fout.is_open()) {
+        fout << std::fixed << std::setprecision(9);
+        if (write_header) {
+          fout << "# id timestamp px py pz qx qy qz qw i00 i01 ... i55\n";
+        }
+        const Qd& q = kf.q;
+        fout << kf.id << " " << kf.timestamp << " " << kf.p.x() << " " << kf.p.y() << " " << kf.p.z() << " " << q.x()
+             << " " << q.y() << " " << q.z() << " " << q.w();
+        for (int r = 0; r < 6; ++r) {
+          for (int c = 0; c < 6; ++c) {
+            fout << " " << kf.info_mat(r, c);
           }
         }
-        mergeOptimizedKeyframesToMap();
+        fout << "\n";
+        fout.close();
+      } else {
+        LOG(ERROR) << "无法写入关键帧位姿文件: " << pose_path;
       }
     }
 
-    // 回环检测: 新关键帧触发
-    // tryLoopClosure();
+    // 仅合并到临时地图 (供在线可视化 / 临时 all_map 查看)，不做任何优化/回环
+    mergeOptimizedKeyframesToMap();
   }
 
   // 7. 更新地图局部中心
@@ -265,38 +236,6 @@ CloudPtr Frontend::featureSample(const CloudPtr& cloud) const {
   return out;
 }
 
-void Frontend::tryLoopClosure() {
-  const auto& kfs = backend_->getKeyFrames();
-  const auto& current_kf = kfs.back();
-
-  // 始终添加描述子到检索库 (否则前29帧的描述子丢失, 永远找不到足够老的候选)
-  loop_closure_->addKeyframe(current_kf);
-
-  if (static_cast<int>(kfs.size()) < 30) {
-    return;
-  }
-
-  kf_since_loop_check_++;
-  if (kf_since_loop_check_ < loop_closure_interval_) {
-    return;
-  }
-  kf_since_loop_check_ = 0;
-
-  {
-    std::vector<LoopPair> loop_pairs;
-    if (loop_closure_->detect(current_kf, loop_pairs)) {
-      LOG(INFO) << "检测到 " << loop_pairs.size() << " 个回环, 执行全局优化";
-      backend_->globalOptimize(loop_pairs);
-
-      // 全局优化后暂不立即重置IESKF和重建地图
-      // 等连续N帧NDT配准成功后, 再平滑应用优化结果
-      pending_rebuild_ = true;
-      consecutive_stable_ = 0;
-      LOG(INFO) << "[LoopClosure] 等待 " << kPendingRebuildThreshold << " 帧连续配准成功后重建地图...";
-    }
-  }
-}
-
 void Frontend::saveMap(const std::string& save_dir) {
   map_->clearAll();
   const auto& kfs = backend_->getKeyFrames();
@@ -323,34 +262,6 @@ void Frontend::saveMap(const std::string& save_dir) {
   std::string map_path = save_dir + "all_map.pcd";
   pcl::io::savePCDFileBinary(map_path, *all);
   LOG(INFO) << "地图保存完成: " << map_path << ", 点数: " << all->size();
-}
-
-void Frontend::resetESKFWithOptimizedPose(const State& state) {
-  // 用优化后轨迹的相邻 KF 位姿差分估算速度
-  V3d v_est = V3d::Zero();
-  const auto& kfs = backend_->getKeyFrames();
-  if (kfs.size() >= 2) {
-    const auto& prev_kf = kfs[kfs.size() - 2];
-    double dt = state.timestamp - prev_kf.timestamp;
-    if (dt > 0.01) {
-      v_est = (state.p - prev_kf.p) / dt;
-    }
-  }
-
-  // 设置 IESKF 全量状态
-  // 保留当前的 bg, ba, g 估计 (它们不受后端优化的影响)
-  State cur = ieskf_->getNominalState();
-  ieskf_->setState(state.q, state.p, v_est, cur.bg, cur.ba, cur.g, state.timestamp);
-
-  // 重置协方差
-  Eigen::Matrix<double, 18, 18> P_new = Eigen::Matrix<double, 18, 18>::Identity() * 1e-4;
-  P_new.block<3, 3>(0, 0) *= 0.05;  // 位置: 0.05 m²
-  P_new.block<3, 3>(3, 3) *= 1.0;   // 速度: 1.0 (m/s)²
-  P_new.block<3, 3>(6, 6) *= 0.01;  // 旋转: 0.01 rad²
-  ieskf_->setCovariance(P_new);
-
-  LOG(INFO) << "[IESKF Reset] p=" << state.p.transpose() << " v_est=" << v_est.transpose()
-            << " g=" << cur.g.transpose();
 }
 
 void Frontend::mergeOptimizedKeyframesToMap() {
@@ -428,38 +339,6 @@ void Frontend::mergeOptimizedKeyframesToMap() {
 
   if (!merged_ids.empty()) {
     backend_->markKeyframesMerged(merged_ids);
-  }
-}
-
-void Frontend::rebuildMapFromKeyframes() {
-  map_->clearAll();
-
-  const auto& kfs = backend_->getKeyFrames();
-  for (const auto& kf : kfs) {
-    if (!kf.cloud || kf.cloud->empty()) {
-      continue;
-    }
-
-    CloudPtr world_cloud(new PointCloudType());
-    M4f T = M4f::Identity();
-    T.block<3, 3>(0, 0) = kf.q.toRotationMatrix().cast<float>();
-    T.block<3, 1>(0, 3) = kf.p.cast<float>();
-    pcl::transformPointCloud(*kf.cloud, *world_cloud, T);
-
-    CloudPtr ds_world_cloud = dsCloud(world_cloud, 0.1f);
-    map_->addCloud(ds_world_cloud);
-  }
-
-  for (auto& kf : kfs) {
-    kf.merged = true;
-  }
-
-  LOG(INFO) << "[MapRebuild] 回环后地图重建完成, 点数: " << map_->size();
-
-  if (is_use_viewer_ && viewer_ && viewer_->isRunning()) {
-    viewer_->clearGlobalMap();
-    auto rebuilt_cloud = map_->getCloud();
-    viewer_->appendGlobalMap(rebuilt_cloud);
   }
 }
 

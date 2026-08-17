@@ -8,7 +8,6 @@
 #include "frontend/registration.hpp"
 #include "frontend/state.hpp"
 #include "frontend/voxel_map.hpp"
-#include "loop_closure/loop_closure.hpp"
 #include "utils/ros_types.hpp"
 #include "visualization/pangolin_viewer.hpp"
 
@@ -111,7 +110,6 @@ class Frontend {
   std::unique_ptr<NDTRegistration> reg_;
   std::unique_ptr<IESKF> ieskf_;
   std::unique_ptr<Backend> backend_;
-  std::unique_ptr<LoopClosure> loop_closure_;
 
   // 可视化
   std::unique_ptr<PangolinViewer> viewer_;
@@ -122,34 +120,14 @@ class Frontend {
   bool initialized_ = false;
   int frame_count_ = 0;
 
-  int loop_closure_interval_ = 10;  // 每10个关键帧检测一次回环
-  int kf_since_loop_check_ = 0;
-
-  // 回环滞后应用: 全局优化后不立即替换地图, 等连续N帧配准成功后再应用
-  bool pending_rebuild_ = false;
-  int consecutive_stable_ = 0;
-  static constexpr int kPendingRebuildThreshold = 5;
-
   // 配准后的特征点云 (用于关键帧)
   CloudPtr last_feature_cloud_;
 
   bool last_reg_success_ = false;
   bool diverged_ = false;
 
-  void tryLoopClosure();
-
-  /**
-   * @brief 用后端优化后的位姿重置 IESKF 状态
-   */
-  void resetESKFWithOptimizedPose(const State& state);
-
   /**
    * @brief 将已优化的关键帧点云合并到地图
    */
   void mergeOptimizedKeyframesToMap();
-
-  /**
-   * @brief 地图重建（回环后）
-   */
-  void rebuildMapFromKeyframes();
 };
