@@ -117,9 +117,8 @@ bool VoxelMap::getCell(const PointType& pt, NDTCell& cell, NearbyType nearby) co
   return false;
 }
 
-bool VoxelMap::hasNearbyCell(const PointType& pt, float radius, NearbyType nearby) const {
+bool VoxelMap::hasNearbyCell(const PointType& pt, NearbyType nearby) const {
   VoxelKey center = pointToVoxel(pt);
-  float radius2 = radius * radius;
 
   // CENTER: 仅检查中心体素; NEARBY6: 7邻域; NEARBY26: 27邻域
   const auto& offsets = (nearby == NearbyType::NEARBY26) ? kNeighborOffset27
@@ -136,17 +135,6 @@ bool VoxelMap::hasNearbyCell(const PointType& pt, float radius, NearbyType nearb
 
     if (!iter->second.ndt_estimated) {
       continue;
-    }
-
-    // 检查体素的均值中心是否在搜索半径内
-    const V3d& mean = iter->second.mean;
-    float dx = pt.x - static_cast<float>(mean.x());
-    float dy = pt.y - static_cast<float>(mean.y());
-    float dz = pt.z - static_cast<float>(mean.z());
-    float dist2 = dx * dx + dy * dy + dz * dz;
-
-    if (dist2 < radius2) {
-      return true;
     }
   }
 

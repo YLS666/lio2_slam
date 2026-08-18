@@ -51,10 +51,11 @@ bool Backend::addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen
     create_kf = true;
   } else if (angle > keyframe_angle_) {
     create_kf = true;
-  } else if (time_diff > keyframe_min_interval_ && dist > keyframe_distance_ * 0.5) {
-    // 时间间隔足够并且有一定的位移
-    create_kf = true;
   }
+  // else if (time_diff > keyframe_min_interval_ && dist > keyframe_distance_ * 0.5) {
+  //   // 时间间隔足够并且有一定的位移
+  //   create_kf = true;
+  // }
 
   if (!create_kf) {
     return false;

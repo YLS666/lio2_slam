@@ -80,8 +80,8 @@ class Backend {
  private:
   std::deque<KeyFrame> keyframes_;  ///< 关键帧列表
 
-  double keyframe_distance_ = 0.5;      ///< 关键帧距离阈值 m
-  double keyframe_angle_ = 0.35;        ///< 关键帧角度阈值 rad
+  double keyframe_distance_ = 1.0;      ///< 关键帧距离阈值 m
+  double keyframe_angle_ = 0.174;       ///< 关键帧角度阈值 rad
   double keyframe_min_interval_ = 0.5;  ///< 关键帧最小间隔阈值 s
 
   int window_size_ = 20;  ///< 滑动窗口大小

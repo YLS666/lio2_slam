@@ -278,10 +278,6 @@ void Frontend::mergeOptimizedKeyframesToMap() {
     return;
   }
 
-  constexpr float kNormalRadius = 0.5f;    // 正常
-  constexpr float kModerateRadius = 1.0f;  // 中等退化
-  constexpr float kSevereRadius = 1.5f;    // 严重退化
-
   std::vector<int> merged_ids;
   for (size_t i = 0; i < kfs.size(); ++i) {
     const auto& kf = kfs[i];
@@ -292,7 +288,7 @@ void Frontend::mergeOptimizedKeyframesToMap() {
       continue;
     }
 
-    // ---- 退化信号 ----
+    // 退化信号
     double ang_vel = 0.0;
     if (i > 0) {
       const auto& prev_kf = kfs[i - 1];
@@ -304,27 +300,8 @@ void Frontend::mergeOptimizedKeyframesToMap() {
       }
     }
 
-    bool low_ndt = (kf.ndt_effective > 0 && kf.ndt_effective < 300);
-    bool rotation_unconstrained = (ang_vel > 0.3) && (kf.ndt_rot_correction > 1e-6f) && (kf.ndt_rot_correction < 0.03f);
-    bool very_fast = (ang_vel > 0.5);
-
-    float radius;
-    const char* level;
-    if (low_ndt || very_fast) {
-      radius = kSevereRadius;  // 1.5m — 最保守，只加真正的新几何
-      level = "严重";
-    } else if (rotation_unconstrained) {
-      radius = kModerateRadius;  // 1.0m — 过滤重复，但新墙体仍能进入
-      level = "旋转无约束";
-    } else {
-      radius = kNormalRadius;  // 0.5m — 正常
-      level = nullptr;
-    }
-
-    if (level) {
-      LOG(INFO) << "[MapMerge] KF#" << kf.id << " " << level << " (ang=" << ang_vel
-                << " ndtDR=" << kf.ndt_rot_correction << " eff=" << kf.ndt_effective << ") →半径 " << radius;
-    }
+    LOG(INFO) << "[MapMerge] KF#" << kf.id << " " << " (ang=" << ang_vel << " ndtDR=" << kf.ndt_rot_correction
+              << " eff=" << kf.ndt_effective;
 
     CloudPtr world_cloud(new PointCloudType());
     M4f T = M4f::Identity();
@@ -335,7 +312,7 @@ void Frontend::mergeOptimizedKeyframesToMap() {
     CloudPtr new_cloud(new PointCloudType());
     new_cloud->reserve(world_cloud->size());
     for (const auto& pt : world_cloud->points) {
-      if (!map_->hasNearbyCell(pt, radius, NearbyType::CENTER)) {
+      if (!map_->hasNearbyCell(pt, NearbyType::CENTER)) {
         new_cloud->push_back(pt);
       }
     }

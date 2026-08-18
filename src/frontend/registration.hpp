@@ -51,7 +51,7 @@ class NDTRegistration {
   int max_iteration_;
   bool use_huber_ = false;
   double huber_k_ = 0.3;
-  double info_ratio_ = 0.01;     // HᵀV⁻¹H 缩放系数 (对齐 slam_tools)
+  double info_ratio_ = 0.01;     // HᵀV⁻¹H 缩放系数
   double res_outlier_th_ = 5.0;  // 马氏距离离群阈值
 
   int match_count_ = 0;
