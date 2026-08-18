@@ -267,7 +267,7 @@ void Frontend::saveMap(const std::string& save_dir) {
   }
 
   CloudPtr all = map_->getCloud();
-  std::string map_path = save_dir + "all_map.pcd";
+  std::string map_path = save_dir + "all_map_1.pcd";
   pcl::io::savePCDFileBinary(map_path, *all);
   LOG(INFO) << "地图保存完成: " << map_path << ", 点数: " << all->size();
 }

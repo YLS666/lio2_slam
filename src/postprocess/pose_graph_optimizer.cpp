@@ -1,13 +1,10 @@
 #include "postprocess/pose_graph_optimizer.hpp"
-
 #include <glog/logging.h>
 #include <pcl/common/transforms.h>
 #include <pcl/io/pcd_io.h>
-
 #include <fstream>
 #include <iomanip>
 #include <sstream>
-
 #include "loop_closure/loop_closure.hpp"
 #include "utils/eigen_types.hpp"
 #include "utils/g2o_types.hpp"

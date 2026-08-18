@@ -31,7 +31,6 @@ bool Backend::addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen
 
   // 检查是否满足关键帧条件
   const auto& last = keyframes_.back();
-  double time_diff = state.timestamp - last.timestamp;  // 简化时间
 
   // 计算与上一关键帧的相对变换
   M3d R_last = last.q.toRotationMatrix();
@@ -52,10 +51,6 @@ bool Backend::addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen
   } else if (angle > keyframe_angle_) {
     create_kf = true;
   }
-  // else if (time_diff > keyframe_min_interval_ && dist > keyframe_distance_ * 0.5) {
-  //   // 时间间隔足够并且有一定的位移
-  //   create_kf = true;
-  // }
 
   if (!create_kf) {
     return false;

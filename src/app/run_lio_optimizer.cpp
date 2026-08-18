@@ -1,25 +1,34 @@
 #include <glog/logging.h>
 #include <pcl/io/pcd_io.h>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include "postprocess/pose_graph_optimizer.hpp"
 
 int main(int argc, char** argv) {
-  google::InitGoogleLogging(argv[0]);
-  FLAGS_stderrthreshold = 0;
-  FLAGS_colorlogtostderr = true;
+  (void)argc;
 
-  if (argc < 5) {
-    std::cerr << "用法: run_optimizer <pose_file> <cloud_dir> <output_pose_file> <output_map.pcd>\n"
-              << "示例: run_optimizer /path/to/map/keyframe_poses.txt /path/to/map/ "
-                 "/path/to/map/optimized_poses.txt /path/to/map/optimized_map.pcd\n";
-    return -1;
+  // std::string log_dir = std::string(std::getenv("HOME")) + "/.kx/log";
+  std::string log_dir = "./src/lio2_slam/log";  // 替换为你的日志目录路径
+  if (!std::filesystem::exists(log_dir)) {
+    LOG(ERROR) << "日志目录不存在: " << log_dir;
+    std::filesystem::create_directories(log_dir);
   }
 
-  std::string pose_file = argv[1];
-  std::string cloud_dir = argv[2];
-  std::string out_pose_file = argv[3];
-  std::string out_map_file = argv[4];
+  google::InitGoogleLogging(argv[0]);
+  FLAGS_stderrthreshold = 0;      // 所有级别(INFO)都输出到stderr
+  FLAGS_colorlogtostderr = true;  // 终端彩色输出
+  FLAGS_log_dir = log_dir;        // 日志文件存放路径
+  FLAGS_max_log_size = 20;        // 单个日志文件最大 20MB
+  FLAGS_file_line_printf = true;  // 日志中打印文件位置
+  FLAGS_rfc3339_format = false;   // 不使用RFC3339格式
+  // FLAGS_logbuflevel = -1;       // 可选: 关闭缓存立即刷盘
+
+  std::string slam_data = std::string(std::getenv("HOME")) + "/data/slam_tools/map/map_0/test/";
+  std::string pose_file = slam_data + "keyframe_poses.txt";
+  std::string cloud_dir = slam_data;
+  std::string out_pose_file = slam_data + "optimized_poses.txt";
+  std::string out_map_file = slam_data + "all_map_2.pcd";
 
   // 1. 加载关键帧位姿
   std::deque<KeyFrame> keyframes;

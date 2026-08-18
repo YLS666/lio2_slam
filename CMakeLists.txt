@@ -87,6 +87,7 @@ include_directories (${PROJECT_SOURCE_DIR}/src)
 
 find_package (OpenMP QUIET)
 
+# run_mapping
 add_executable (
   run_mapping
   src/app/run_lio_mapper.cpp
@@ -99,27 +100,30 @@ add_executable (
   src/frontend/voxel_map.cpp
   src/estimator/ieskf.cpp
   src/backend/backend.cpp
-  src/loop_closure/loop_closure.cpp
-  src/loop_closure/scan_context.cpp
   src/visualization/pangolin_viewer.cpp
   src/visualization/viewer_hud.cpp
   src/visualization/viewer_layout.cpp
   src/visualization/viewer_plot.cpp
   src/visualization/viewer_render.cpp
   src/visualization/viewer_control.cpp)
-
 target_link_libraries (
   run_mapping ${third_party_libs} ${Pangolin_LIBRARIES})
-
 ament_target_dependencies (run_mapping ${ament_dependencies})
-
 install (TARGETS run_mapping RUNTIME DESTINATION lib/${PROJECT_NAME})
-
 install (DIRECTORY config DESTINATION share/${PROJECT_NAME}/)
 
-if (BUILD_TESTING)
-  find_package (ament_lint_auto REQUIRED)
-  ament_lint_auto_find_test_dependencies ()
-endif ()
+# run_optimizer
+add_executable (
+  run_optimizer
+  src/app/run_lio_optimizer.cpp
+  src/postprocess/pose_graph_optimizer.cpp
+  src/loop_closure/loop_closure.cpp
+  src/loop_closure/scan_context.cpp
+  src/backend/backend.cpp)
+
+target_link_libraries (
+  run_optimizer ${third_party_libs} ${Pangolin_LIBRARIES})
+ament_target_dependencies (run_optimizer ${ament_dependencies})
+install (TARGETS run_optimizer RUNTIME DESTINATION lib/${PROJECT_NAME})
 
 ament_package ()
