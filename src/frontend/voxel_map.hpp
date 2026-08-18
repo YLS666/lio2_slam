@@ -99,11 +99,10 @@ class VoxelMap {
   /**
    * @brief 检查查询点附近是否存在已估计的NDT体素
    * @param pt 查询点
-   * @param radius 搜索半径（体素中心到查询点的距离阈值）
    * @param nearby 搜索范围（CENTER: 仅自身; NEARBY6: 7邻域; NEARBY26: 27邻域）
    * @return true 存在可用的NDT体素
    */
-  bool hasNearbyCell(const PointType& pt, float radius, NearbyType nearby = NearbyType::CENTER) const;
+  bool hasNearbyCell(const PointType& pt, NearbyType nearby = NearbyType::CENTER) const;
 
   /**
    * @brief 根据当前位姿裁剪局部地图

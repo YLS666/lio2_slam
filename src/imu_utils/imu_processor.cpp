@@ -146,7 +146,7 @@ bool ImuProcessor::processImu(const Imu& imu) {
   V3d acc(imu.linear_acceleration.x, imu.linear_acceleration.y, imu.linear_acceleration.z);
 
   // g -> m/s²
-  acc *= g_norm_;
+  acc *= g_norm_ * acc_scale_;
 
   // 初始化
   if (!initialized_) {
