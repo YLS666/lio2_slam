@@ -69,7 +69,7 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
   CloudPtr ds_cloud = dsCloud(cloud, 0.1f);
   auto feature_cloud = featureSample(ds_cloud);
 
-  // 2. IEKF + NDT 配准 (对齐 slam_tools 架构)
+  // 2. IEKF + NDT 配准
   // NDT 作为 IEKF 的观测回调, 在每次 IEKF 迭代中重新线性化
   //   - IMU 先验 (协方差 P) + NDT 观测 (HTVH/HTVr) 在每次迭代中同时起作用
   //   - 不再先做独立 NDT 优化再喂给 ESKF

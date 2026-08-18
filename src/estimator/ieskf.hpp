@@ -23,7 +23,6 @@ class IESKF {
     int num_iterations_ = 3;  // IEKF 最大迭代次数
     double quit_eps_ = 1e-3;  // dx 范数小于此值则提前收敛
 
-    // 对齐 slam_tools: buildNoise() 中不平方, 直接使用这些值
     double gyr_noise_ = 1.7e-4;  // 陀螺仪白噪声方差 (rad²/s²)
     double acc_noise_ = 2.0e-3;  // 加速度计白噪声方差 (m²/s⁴)
     double bg_noise_ = 1e-6;     // 陀螺仪 bias 随机游走方差
