@@ -38,7 +38,7 @@ class LoopClosure {
    */
   void setMinInterval(int interval) { min_interval_ = interval; }
   void setCandidateNum(int n) { candidate_num_ = n; }
-  void setMinScore(double s) { min_score_ = s; }
+  void setMaxScore(double s) { max_score_ = s; }
 
   /**
    * @brief 设置关键帧列表指针 (用于几何验证中查找候选帧)
@@ -53,8 +53,8 @@ class LoopClosure {
   // 参数
   int min_interval_ = 30;          // 最小间隔 (关键帧数)
   int candidate_num_ = 5;          // 候选数量
-  double min_score_ = 0.3;         // 配准得分阈值
-  double icp_score_thresh_ = 0.1;  // ICP配准得分阈值
+  double max_score_ = 2.0;         // 配准得分阈值
+  double icp_score_thresh_ = 0.5;  // ICP配准得分阈值
 
   int last_loop_frame_id_ = -1;  // 上一次回环的帧ID（避免重复检测）
 

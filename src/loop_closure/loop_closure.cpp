@@ -9,6 +9,7 @@
 #include "backend/keyframe.hpp"
 #include "cloud_utils/point_type.hpp"
 #include "loop_closure/scan_context.hpp"
+#include "utils/eigen_types.hpp"
 
 void LoopClosure::addKeyframe(const KeyFrame& kf) {
   if (!kf.cloud || kf.cloud->empty()) {
@@ -60,11 +61,13 @@ bool LoopClosure::detect(const KeyFrame& current_kf, std::vector<LoopPair>& loop
 
   bool loop_found = false;
   for (int c = 0; c < std::min(candidate_num_, static_cast<int>(scores.size())); ++c) {
-    if (scores[c].first > min_score_) {
+    if (scores[c].first > max_score_) {
       continue;
     }
 
     int candidate_id = scores[c].second;
+    LOG(INFO) << "current_kf_id : " << current_kf.id << "candidate_id : " << scores[c].second
+              << "dist : " << scores[c].first;
 
     const KeyFrame* candidate_kf = nullptr;
     if (keyframes_ptr_) {
@@ -114,20 +117,27 @@ bool LoopClosure::geometricVerification(const KeyFrame& kf1, const KeyFrame& kf2
 
   // 使用ICP 进行几何验证
   pcl::IterativeClosestPoint<PointType, PointType> icp;
-  icp.setMaxCorrespondenceDistance(2.0);  // 2米内搜索
   icp.setMaximumIterations(50);
-  icp.setTransformationEpsilon(1e-6);
-  icp.setEuclideanFitnessEpsilon(0.01);
-
   // 源：kf2(当前帧) ， 目标：kf1(历史帧)
   icp.setInputSource(kf2.cloud);
   icp.setInputTarget(kf1.cloud);
 
   PointCloudType aligned;
 
-  icp.align(aligned);
+  M4f kf1_pose = M4f::Identity();
+  kf1_pose.block<3, 3>(0, 0) = kf1.q.toRotationMatrix().cast<float>();
+  kf1_pose.block<3, 1>(0, 3) = kf1.p.cast<float>();
+
+  M4f kf2_pose = M4f::Identity();
+  kf2_pose.block<3, 3>(0, 0) = kf2.q.toRotationMatrix().cast<float>();
+  kf2_pose.block<3, 1>(0, 3) = kf2.p.cast<float>();
+
+  M4f T_init = kf1_pose.inverse() * kf2_pose;
+
+  icp.align(aligned, T_init);
 
   if (!icp.hasConverged() || icp.getFitnessScore() > icp_score_thresh_) {
+    LOG(INFO) << "icp_score:" << icp.getFitnessScore();
     return false;
   }
 
