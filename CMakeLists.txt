@@ -116,11 +116,8 @@ install (DIRECTORY config DESTINATION share/${PROJECT_NAME}/)
 # run_optimizer
 add_executable (
   run_optimizer
-  src/app/run_lio_optimizer.cpp
-  src/postprocess/pose_graph_optimizer.cpp
-  src/loop_closure/loop_closure.cpp
-  src/loop_closure/scan_context.cpp
-  src/backend/backend.cpp)
+  src/app/run_lio_optimizer.cpp src/postprocess/pose_graph_optimizer.cpp
+  src/loop_closure/loop_closure.cpp src/backend/backend.cpp)
 
 target_link_libraries (
   run_optimizer ${third_party_libs} ${Pangolin_LIBRARIES})

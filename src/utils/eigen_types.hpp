@@ -30,6 +30,9 @@ using M2i = Eigen::Matrix2i;
 using M3i = Eigen::Matrix3i;
 using M4i = Eigen::Matrix4i;
 
+using M6d = Eigen::Matrix<double, 6, 6>;
+using M6f = Eigen::Matrix<float, 6, 6>;
+
 using Qd = Eigen::Quaterniond;
 
 using SE2 = Sophus::SE2d;

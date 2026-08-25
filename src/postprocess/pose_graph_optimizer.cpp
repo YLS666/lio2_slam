@@ -111,23 +111,7 @@ void detectLoopClosures(const std::deque<KeyFrame>& keyframes, std::vector<LoopP
   loop_pairs.clear();
 
   LoopClosure lc;
-  lc.setKeyframesPtr(&keyframes);
-
-  // 先全部加入描述子库
-  for (const auto& kf : keyframes) {
-    lc.addKeyframe(kf);
-  }
-
-  // 再对每个关键帧检测回环
-  for (const auto& kf : keyframes) {
-    if (!kf.cloud || kf.cloud->empty()) {
-      continue;
-    }
-    std::vector<LoopPair> pairs;
-    if (lc.detect(kf, pairs)) {
-      loop_pairs.insert(loop_pairs.end(), pairs.begin(), pairs.end());
-    }
-  }
+  lc.run(keyframes, loop_pairs);
 
   LOG(INFO) << "回环检测完成, 共 " << loop_pairs.size() << " 个回环约束";
 }
@@ -156,16 +140,11 @@ bool globalOptimize(std::deque<KeyFrame>& keyframes, const std::vector<LoopPair>
   optimizer.setVerbose(true);
 
   // 顶点
-  std::vector<g2o::VertexSE3*> vertices(N);
+  std::vector<postprocess::VertexPose*> vertices(N);
   for (int i = 0; i < N; ++i) {
-    auto* v = new g2o::VertexSE3();
+    auto* v = new postprocess::VertexPose();
     v->setId(i);
-
-    Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
-    T.rotate(keyframes[i].q.toRotationMatrix());
-    T.pretranslate(keyframes[i].p);
-    v->setEstimate(T);
-
+    v->setEstimate(SE3(keyframes[i].q, keyframes[i].p));
     if (i == 0) {
       v->setFixed(true);
     }
@@ -175,15 +154,6 @@ bool globalOptimize(std::deque<KeyFrame>& keyframes, const std::vector<LoopPair>
 
   // 帧间约束
   for (int i = 0; i < N - 1; ++i) {
-    auto* edge = new g2o::EdgeSE3();
-    edge->setVertex(0, vertices[i]);
-    edge->setVertex(1, vertices[i + 1]);
-
-    Eigen::Isometry3d T_rel = Eigen::Isometry3d::Identity();
-    T_rel.rotate(keyframes[i + 1].relative_q.toRotationMatrix());
-    T_rel.pretranslate(keyframes[i + 1].relative_p);
-    edge->setMeasurement(T_rel);
-
     Eigen::Matrix<double, 6, 6> info = keyframes[i + 1].info_mat;
     double det = info.determinant();
     if (det < 1e-12 || det > 1e18 || float_check::isnan(det) || float_check::isinf(det)) {
@@ -197,27 +167,29 @@ bool globalOptimize(std::deque<KeyFrame>& keyframes, const std::vector<LoopPair>
         info *= MAX_INFO_EIGEN / max_ev;
       }
     }
-    edge->setInformation(info);
+
+    SE3 obs(keyframes[i + 1].relative_q, keyframes[i + 1].relative_p);
+    auto* edge = new postprocess::EdgeRelativeMotion(vertices[i], vertices[i + 1], obs, info);
     optimizer.addEdge(edge);
   }
 
   // 回环约束
+  constexpr double loop_rk_th = 0.2;
   for (const auto& lp : loop_pairs) {
     if (lp.id_a < 0 || lp.id_a >= N || lp.id_b < 0 || lp.id_b >= N) {
       continue;
     }
+    if (!lp.rel_p.allFinite() || !lp.rel_q.coeffs().allFinite()) {
+      LOG(WARNING) << "回环约束 " << lp.id_a << "<->" << lp.id_b << " 非有限, 跳过";
+      continue;
+    }
 
-    auto* edge = new g2o::EdgeSE3();
-    edge->setVertex(0, vertices[lp.id_a]);
-    edge->setVertex(1, vertices[lp.id_b]);
-
-    Eigen::Isometry3d T_rel = Eigen::Isometry3d::Identity();
-    T_rel.rotate(lp.rel_q.toRotationMatrix());
-    T_rel.pretranslate(lp.rel_p);
-    edge->setMeasurement(T_rel);
-
+    SE3 obs(lp.rel_q, lp.rel_p);
     Eigen::Matrix<double, 6, 6> loop_info = Eigen::Matrix<double, 6, 6>::Identity() * lp.info_weight * 10.0;
-    edge->setInformation(loop_info);
+    auto* edge = new postprocess::EdgeRelativeMotion(vertices[lp.id_a], vertices[lp.id_b], obs, loop_info);
+    auto rk = new g2o::RobustKernelCauchy();
+    rk->setDelta(loop_rk_th);
+    edge->setRobustKernel(rk);
     optimizer.addEdge(edge);
   }
 
@@ -225,8 +197,8 @@ bool globalOptimize(std::deque<KeyFrame>& keyframes, const std::vector<LoopPair>
   optimizer.optimize(50);
 
   for (int i = 0; i < N; ++i) {
-    Eigen::Isometry3d T = vertices[i]->estimate();
-    keyframes[i].q = Eigen::Quaterniond(T.rotation()).normalized();
+    const SE3& T = vertices[i]->estimate();
+    keyframes[i].q = T.so3().unit_quaternion().normalized();
     keyframes[i].p = T.translation();
   }
 
