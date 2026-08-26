@@ -114,11 +114,11 @@ void LoopClosure::computeForCandidate(const std::vector<const KeyFrame*>& kfs, c
   const KeyFrame* kf1 = kfs[c.idx1];
   const KeyFrame* kf2 = kfs[c.idx2];
 
-  // 目标: kf1 邻域的世界系子图; 源: kf2 单帧局部系 (与参考实现一致)
-  CloudPtr target = buildSubmap(kfs, world_T, id_to_index, c.idx1);
-  CloudPtr source = kf2->cloud;
+  // 目标: kf1 邻域世界系子图; 源: kf2 单帧局部系
+  CloudPtr target_orig = buildSubmap(kfs, world_T, id_to_index, c.idx1);
+  CloudPtr source_orig = kf2->cloud;
 
-  if (!target || target->empty() || !source || source->empty()) {
+  if (!target_orig || target_orig->empty() || !source_orig || source_orig->empty()) {
     c.ndt_score = 0;
     return;
   }
@@ -129,12 +129,12 @@ void LoopClosure::computeForCandidate(const std::vector<const KeyFrame*>& kfs, c
   ndt.setMaximumIterations(ndt_max_iter_);
 
   M4f Tw2 = world_T[c.idx2];
-
   CloudPtr output(new PointCloudType());
   for (double r : resolutions_) {
     ndt.setResolution(static_cast<float>(r));
-    target = dsCloud(target, static_cast<float>(r * 0.1));
-    source = dsCloud(source, static_cast<float>(r * 0.1));
+    // 每次都从原始点云重采样
+    CloudPtr target = dsCloud(target_orig, static_cast<float>(r * 0.1));
+    CloudPtr source = dsCloud(source_orig, static_cast<float>(r * 0.1));
     ndt.setInputTarget(target);
     ndt.setInputSource(source);
 
