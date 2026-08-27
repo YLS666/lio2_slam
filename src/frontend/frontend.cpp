@@ -10,7 +10,7 @@
 #include "cloud_utils/point_type.hpp"
 
 Frontend::Frontend(AllConfig config)
-    : is_use_viewer_(config.is_use_imu), last_feature_cloud_(new pcl::PointCloud<PointType>()) {
+    : is_use_viewer_(config.is_use_ui), last_feature_cloud_(new pcl::PointCloud<PointType>()) {
   // 体素地图
   map_ = std::make_unique<VoxelMap>(0.5f, 20.0f, 4);
 

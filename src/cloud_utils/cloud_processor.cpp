@@ -8,8 +8,8 @@
 #include "utils/math_types.hpp"
 
 CloudProcessor::CloudProcessor(AllConfig& config) {
-  q_il_ = vecToMat(config.r_imu_lidar).normalized();
-  t_il_ = V3d(config.t_imu_lidar.data());
+  q_li_ = vecToMat(config.r_lidar_imu).normalized();
+  t_li_ = V3d(config.t_lidar_imu.data());
 }
 
 void CloudProcessor::pre_process(const PointCloud2SharedPtr& cloud, FullCloudPtr& out_cloud) {
@@ -176,7 +176,7 @@ CloudPtr CloudProcessor::process(const MeasureGroup& measures, ImuProcessor* imu
                         // lidar点
                         p_lidar << pt.x, pt.y, pt.z;
                         // lidar -> imu
-                        p_imu = q_il_ * p_lidar + t_il_;
+                        p_imu = q_li_ * p_lidar + t_li_;
                         // imu -> world
                         p_world = pose.R * p_imu + pose.t;
                         // world -> end frame
