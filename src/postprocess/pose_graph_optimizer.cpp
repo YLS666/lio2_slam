@@ -1,13 +1,10 @@
 #include "postprocess/pose_graph_optimizer.hpp"
-
 #include <glog/logging.h>
 #include <pcl/common/transforms.h>
 #include <pcl/io/pcd_io.h>
-
 #include <fstream>
 #include <iomanip>
 #include <sstream>
-
 #include "loop_closure/loop_closure.hpp"
 #include "utils/eigen_types.hpp"
 #include "utils/g2o_types.hpp"
@@ -114,23 +111,7 @@ void detectLoopClosures(const std::deque<KeyFrame>& keyframes, std::vector<LoopP
   loop_pairs.clear();
 
   LoopClosure lc;
-  lc.setKeyframesPtr(&keyframes);
-
-  // 先全部加入描述子库
-  for (const auto& kf : keyframes) {
-    lc.addKeyframe(kf);
-  }
-
-  // 再对每个关键帧检测回环
-  for (const auto& kf : keyframes) {
-    if (!kf.cloud || kf.cloud->empty()) {
-      continue;
-    }
-    std::vector<LoopPair> pairs;
-    if (lc.detect(kf, pairs)) {
-      loop_pairs.insert(loop_pairs.end(), pairs.begin(), pairs.end());
-    }
-  }
+  lc.run(keyframes, loop_pairs);
 
   LOG(INFO) << "回环检测完成, 共 " << loop_pairs.size() << " 个回环约束";
 }
@@ -159,16 +140,11 @@ bool globalOptimize(std::deque<KeyFrame>& keyframes, const std::vector<LoopPair>
   optimizer.setVerbose(true);
 
   // 顶点
-  std::vector<g2o::VertexSE3*> vertices(N);
+  std::vector<postprocess::VertexPose*> vertices(N);
   for (int i = 0; i < N; ++i) {
-    auto* v = new g2o::VertexSE3();
+    auto* v = new postprocess::VertexPose();
     v->setId(i);
-
-    Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
-    T.rotate(keyframes[i].q.toRotationMatrix());
-    T.pretranslate(keyframes[i].p);
-    v->setEstimate(T);
-
+    v->setEstimate(SE3(keyframes[i].q, keyframes[i].p));
     if (i == 0) {
       v->setFixed(true);
     }
@@ -178,15 +154,6 @@ bool globalOptimize(std::deque<KeyFrame>& keyframes, const std::vector<LoopPair>
 
   // 帧间约束
   for (int i = 0; i < N - 1; ++i) {
-    auto* edge = new g2o::EdgeSE3();
-    edge->setVertex(0, vertices[i]);
-    edge->setVertex(1, vertices[i + 1]);
-
-    Eigen::Isometry3d T_rel = Eigen::Isometry3d::Identity();
-    T_rel.rotate(keyframes[i + 1].relative_q.toRotationMatrix());
-    T_rel.pretranslate(keyframes[i + 1].relative_p);
-    edge->setMeasurement(T_rel);
-
     Eigen::Matrix<double, 6, 6> info = keyframes[i + 1].info_mat;
     double det = info.determinant();
     if (det < 1e-12 || det > 1e18 || float_check::isnan(det) || float_check::isinf(det)) {
@@ -200,27 +167,36 @@ bool globalOptimize(std::deque<KeyFrame>& keyframes, const std::vector<LoopPair>
         info *= MAX_INFO_EIGEN / max_ev;
       }
     }
-    edge->setInformation(info);
+
+    SE3 obs(keyframes[i + 1].relative_q, keyframes[i + 1].relative_p);
+    auto* edge = new postprocess::EdgeRelativeMotion(vertices[i], vertices[i + 1], obs, info);
     optimizer.addEdge(edge);
   }
 
   // 回环约束
+  constexpr double loop_trans_std = 0.20;  // m，回环 NDT 平移精度
+  constexpr double loop_rot_std = 0.03;    // rad，回环 NDT 旋转精度
+  const double w_t = 1.0 / (loop_trans_std * loop_trans_std);
+  const double w_r = 1.0 / (loop_rot_std * loop_rot_std);
   for (const auto& lp : loop_pairs) {
     if (lp.id_a < 0 || lp.id_a >= N || lp.id_b < 0 || lp.id_b >= N) {
       continue;
     }
+    if (!lp.rel_p.allFinite() || !lp.rel_q.coeffs().allFinite()) {
+      LOG(WARNING) << "回环约束 " << lp.id_a << "<->" << lp.id_b << " 非有限, 跳过";
+      continue;
+    }
 
-    auto* edge = new g2o::EdgeSE3();
-    edge->setVertex(0, vertices[lp.id_a]);
-    edge->setVertex(1, vertices[lp.id_b]);
+    SE3 obs(lp.rel_q, lp.rel_p);
+    Eigen::Matrix<double, 6, 6> loop_info = Eigen::Matrix<double, 6, 6>::Zero();
+    loop_info(0, 0) = loop_info(1, 1) = loop_info(2, 2) = w_t;  // 平移
+    loop_info(3, 3) = loop_info(4, 4) = loop_info(5, 5) = w_r;  // 旋转
+    loop_info *= lp.info_weight;
 
-    Eigen::Isometry3d T_rel = Eigen::Isometry3d::Identity();
-    T_rel.rotate(lp.rel_q.toRotationMatrix());
-    T_rel.pretranslate(lp.rel_p);
-    edge->setMeasurement(T_rel);
-
-    Eigen::Matrix<double, 6, 6> loop_info = Eigen::Matrix<double, 6, 6>::Identity() * lp.info_weight * 10.0;
-    edge->setInformation(loop_info);
+    auto* edge = new postprocess::EdgeRelativeMotion(vertices[lp.id_a], vertices[lp.id_b], obs, loop_info);
+    auto rk = new g2o::RobustKernelCauchy();
+    rk->setDelta(0.2);
+    edge->setRobustKernel(rk);
     optimizer.addEdge(edge);
   }
 
@@ -228,8 +204,8 @@ bool globalOptimize(std::deque<KeyFrame>& keyframes, const std::vector<LoopPair>
   optimizer.optimize(50);
 
   for (int i = 0; i < N; ++i) {
-    Eigen::Isometry3d T = vertices[i]->estimate();
-    keyframes[i].q = Eigen::Quaterniond(T.rotation()).normalized();
+    const SE3& T = vertices[i]->estimate();
+    keyframes[i].q = T.so3().unit_quaternion().normalized();
     keyframes[i].p = T.translation();
   }
 
@@ -239,23 +215,61 @@ bool globalOptimize(std::deque<KeyFrame>& keyframes, const std::vector<LoopPair>
 
 CloudPtr rebuildGlobalMap(const std::deque<KeyFrame>& keyframes, float voxel_size) {
   CloudPtr all(new PointCloudType());
+
+  // 1. 所有 KeyFrame 转到世界坐标系
   for (const auto& kf : keyframes) {
     if (!kf.cloud || kf.cloud->empty()) {
       continue;
     }
 
     CloudPtr world(new PointCloudType());
+
     M4f T = M4f::Identity();
     T.block<3, 3>(0, 0) = kf.q.toRotationMatrix().cast<float>();
     T.block<3, 1>(0, 3) = kf.p.cast<float>();
     pcl::transformPointCloud(*kf.cloud, *world, T);
+
     *all += *world;
   }
 
-  if (voxel_size > 0) {
-    return dsCloud(all, voxel_size);
+  if (voxel_size <= 0.0f) {
+    return all;
   }
-  return all;
+
+  // 2. 按 50m × 50m 进行空间分块
+  std::map<V2i, CloudPtr, less_vec<2>> map_data;
+  for (const auto& pt : all->points) {
+    const int gx = static_cast<int>(std::floor((pt.x - 25.0f) / 50.0f));
+    const int gy = static_cast<int>(std::floor((pt.y - 25.0f) / 50.0f));
+    const V2i key(gx, gy);
+
+    auto iter = map_data.find(key);
+    if (iter == map_data.end()) {
+      CloudPtr cloud(new PointCloudType());
+      cloud->points.emplace_back(pt);
+      cloud->is_dense = false;
+      cloud->height = 1;
+
+      map_data.emplace(key, cloud);
+    } else {
+      iter->second->points.emplace_back(pt);
+    }
+  }
+
+  CloudPtr result(new PointCloudType());
+  for (const auto& iter : map_data) {
+    CloudPtr ds_cloud = dsCloud(iter.second, voxel_size);
+    *result += *ds_cloud;
+  }
+
+  result->width = static_cast<uint32_t>(result->size());
+  result->height = 1;
+  result->is_dense = false;
+
+  LOG(INFO) << "final map:"
+            << " input=" << all->size() << " output=" << result->size();
+
+  return result;
 }
 
 }  // namespace postprocess

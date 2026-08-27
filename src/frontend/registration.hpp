@@ -39,10 +39,10 @@ class NDTRegistration {
     huber_k_ = k;
   }
 
-  /** @brief 设置信息矩阵缩放系数 (对齐 slam_tools: 0.01) */
+  /** @brief 设置信息矩阵缩放系数 */
   void setInfoRatio(double ratio) { info_ratio_ = ratio; }
 
-  /** @brief 设置马氏距离离群阈值 (对齐 slam_tools: 5.0) */
+  /** @brief 设置马氏距离离群阈值  */
   void setOutlierThreshold(double th) { res_outlier_th_ = th; }
 
  private:

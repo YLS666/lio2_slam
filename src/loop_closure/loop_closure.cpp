@@ -1,140 +1,176 @@
 #include "loop_closure/loop_closure.hpp"
-#include <glog/logging.h>
-#include <pcl/common/transforms.h>
-#include <pcl/registration/icp.h>
-#include <algorithm>
-#include <cmath>
-#include <iostream>
-#include "backend/backend.hpp"
-#include "backend/keyframe.hpp"
-#include "cloud_utils/point_type.hpp"
-#include "loop_closure/scan_context.hpp"
 
-void LoopClosure::addKeyframe(const KeyFrame& kf) {
-  if (!kf.cloud || kf.cloud->empty()) {
+#include <glog/logging.h>
+#include <tbb/tbb.h>
+
+#include <pcl/common/transforms.h>
+#include <pcl/registration/ndt.h>
+
+#include <cmath>
+#include <cstdlib>
+#include <unordered_map>
+
+#include "cloud_utils/point_type.hpp"
+#include "utils/eigen_types.hpp"
+
+void LoopClosure::run(const std::deque<KeyFrame>& keyframes, std::vector<LoopPair>& loop_pairs) {
+  loop_pairs.clear();
+
+  const size_t n = keyframes.size();
+  if (n < 2) {
     return;
   }
 
-  // 生成描述子
-  ScanContext sc;
-  sc.make(kf.cloud);
+  // 1. 构建索引结构 (一次性, 合并计算)
+  std::vector<const KeyFrame*> kfs;
+  std::vector<V3d> translations;
+  std::vector<M4f> world_T;
+  std::unordered_map<int, int> id_to_index;
+  kfs.reserve(n);
+  translations.reserve(n);
+  world_T.reserve(n);
+  id_to_index.reserve(n);
 
-  descriptors_.push_back(sc.getDescriptor());
-  frame_ids_.push_back(kf.id);
+  for (size_t i = 0; i < n; ++i) {
+    const KeyFrame& kf = keyframes[i];
+    kfs.push_back(&kf);
+    translations.push_back(kf.p);
+
+    M4f T = M4f::Identity();
+    T.block<3, 3>(0, 0) = kf.q.toRotationMatrix().cast<float>();
+    T.block<3, 1>(0, 3) = kf.p.cast<float>();
+    world_T.push_back(T);
+
+    id_to_index[kf.id] = static_cast<int>(i);
+  }
+
+  // 2. 位姿距离筛选候选
+  std::vector<Candidate> candidates;
+  detectCandidates(translations, candidates);
+  if (candidates.empty()) {
+    LOG(INFO) << "no loop candidates";
+    return;
+  }
+
+  // 3. TBB 并行 NDT 配准 (每个候选独立 NDT 对象/点云, 线程安全)
+  tbb::parallel_for(tbb::blocked_range<size_t>(0, candidates.size()), [&](const tbb::blocked_range<size_t>& range) {
+    for (size_t i = range.begin(); i != range.end(); ++i) {
+      computeForCandidate(kfs, world_T, id_to_index, candidates[i]);
+    }
+  });
+
+  // 4. 过滤并输出回环约束
+  int succ = 0;
+  for (const auto& c : candidates) {
+    if (c.ndt_score > ndt_score_th_) {
+      LoopPair pair;
+      pair.id_a = c.idx1;
+      pair.id_b = c.idx2;
+      pair.rel_p = c.Tij_.translation();
+      pair.rel_q = c.Tij_.so3().unit_quaternion();
+      pair.info_weight = 1.0;
+      loop_pairs.push_back(pair);
+      succ++;
+    }
+  }
+  LOG(INFO) << "success: " << succ << "/" << candidates.size();
 }
 
-bool LoopClosure::detect(const KeyFrame& current_kf, std::vector<LoopPair>& loop_pairs) {
-  if (descriptors_.empty() || current_kf.id < min_interval_) {
-    return false;
-  }
+void LoopClosure::detectCandidates(const std::vector<V3d>& translations, std::vector<Candidate>& candidates) const {
+  int check_first = -1;
+  int check_second = -1;
+  const int n = static_cast<int>(translations.size());
 
-  // 生成当前关键帧的描述子
-  ScanContext current_sc;
-  current_sc.make(current_kf.cloud);
-  const auto& current_desc = current_sc.getDescriptor();
-
-  // 搜索历史描述子, 找最近邻
-  std::vector<std::pair<double, int>> scores;
-
-  for (size_t i = 0; i < descriptors_.size(); ++i) {
-    int frame_id = frame_ids_[i];
-    // 跳过太近的帧
-    if (current_kf.id - frame_id < min_interval_) {
-      continue;
-    }
-    // 跳过已回环的帧
-    if (frame_id == last_loop_frame_id_) {
+  for (int i = 0; i < n; ++i) {
+    if (check_first != -1 && std::abs(i - check_first) <= skip_id_) {
       continue;
     }
 
-    double dist = ScanContext::distance(current_desc, descriptors_[i]);
-    scores.push_back({dist, frame_id});
-  }
+    for (int j = i; j < n; ++j) {
+      if (check_second != -1 && std::abs(j - check_second) <= skip_id_) {
+        continue;
+      }
 
-  if (scores.empty()) {
-    return false;
-  }
+      if (std::abs(i - j) < min_id_interval_) {
+        continue;
+      }
 
-  // 按距离排序 (取最小的 top-N)
-  std::sort(scores.begin(), scores.end());
-
-  bool loop_found = false;
-  for (int c = 0; c < std::min(candidate_num_, static_cast<int>(scores.size())); ++c) {
-    if (scores[c].first > min_score_) {
-      continue;
-    }
-
-    int candidate_id = scores[c].second;
-
-    const KeyFrame* candidate_kf = nullptr;
-    if (keyframes_ptr_) {
-      for (const auto& kf : *keyframes_ptr_) {
-        if (kf.id == candidate_id) {
-          candidate_kf = &kf;
-          break;
-        }
+      double t2d = (translations[i] - translations[j]).head<2>().norm();
+      if (t2d < min_distance_) {
+        Candidate c;
+        c.idx1 = i;
+        c.idx2 = j;
+        candidates.push_back(c);
+        check_first = i;
+        check_second = j;
       }
     }
+  }
+  LOG(INFO) << "detected candidates: " << candidates.size();
+}
 
-    // 没找到候选帧，跳过
-    if (!candidate_kf) {
-      LOG(WARNING) << "回环检测: 未找到候选关键帧 id=" << candidate_id;
+void LoopClosure::computeForCandidate(const std::vector<const KeyFrame*>& kfs, const std::vector<M4f>& world_T,
+                                      const std::unordered_map<int, int>& id_to_index, Candidate& c) const {
+  const KeyFrame* kf1 = kfs[c.idx1];
+  const KeyFrame* kf2 = kfs[c.idx2];
+
+  // 目标: kf1 邻域世界系子图; 源: kf2 单帧局部系
+  CloudPtr target_orig = buildSubmap(kfs, world_T, id_to_index, c.idx1);
+  CloudPtr source_orig = kf2->cloud;
+
+  if (!target_orig || target_orig->empty() || !source_orig || source_orig->empty()) {
+    c.ndt_score = 0;
+    return;
+  }
+
+  pcl::NormalDistributionsTransform<PointType, PointType> ndt;
+  ndt.setTransformationEpsilon(ndt_trans_epsilon_);
+  ndt.setStepSize(ndt_step_size_);
+  ndt.setMaximumIterations(ndt_max_iter_);
+
+  M4f Tw2 = world_T[c.idx2];
+  CloudPtr output(new PointCloudType());
+  for (double r : resolutions_) {
+    ndt.setResolution(static_cast<float>(r));
+    // 每次都从原始点云重采样
+    CloudPtr target = dsCloud(target_orig, static_cast<float>(r * 0.1));
+    CloudPtr source = dsCloud(source_orig, static_cast<float>(r * 0.1));
+    ndt.setInputTarget(target);
+    ndt.setInputSource(source);
+
+    ndt.align(*output, Tw2);
+    Tw2 = ndt.getFinalTransformation();
+  }
+
+  M4d T = Tw2.cast<double>();
+  Qd q(T.block<3, 3>(0, 0));
+  q.normalize();
+  V3d t = T.block<3, 1>(0, 3);
+
+  c.Tij_ = SE3(kf1->q, kf1->p).inverse() * SE3(q, t);
+  c.ndt_score = ndt.getTransformationProbability();
+
+  LOG(INFO) << "first " << c.idx1 << " second " << c.idx2 << " score " << c.ndt_score;
+}
+
+CloudPtr LoopClosure::buildSubmap(const std::vector<const KeyFrame*>& kfs, const std::vector<M4f>& world_T,
+                                  const std::unordered_map<int, int>& id_to_index, int center_id) const {
+  CloudPtr submap(new PointCloudType());
+  for (int offset = -submap_idx_range_; offset < submap_idx_range_; offset += submap_step_) {
+    int id = center_id + offset;
+    auto iter = id_to_index.find(id);
+    if (iter == id_to_index.end()) {
       continue;
     }
 
-    // 获取候选关键帧
-    V3d rel_p;
-    Qd rel_q;
-
-    bool verified = geometricVerification(*candidate_kf, current_kf, rel_p, rel_q);
-
-    if (verified) {
-      LoopPair pair;
-      pair.id_a = candidate_id;
-      pair.id_b = current_kf.id;
-      pair.rel_p = rel_p;
-      pair.rel_q = rel_q;
-      pair.info_weight = 1.0;
-
-      loop_pairs.push_back(pair);
-      last_loop_frame_id_ = candidate_id;
-      loop_found = true;
-
-      LOG(INFO) << "回环检测成功，帧" << candidate_id << "<->帧" << current_kf.id << "，距离：" << scores[c].first;
+    const KeyFrame* kf = kfs[iter->second];
+    if (!kf->cloud || kf->cloud->empty()) {
+      continue;
     }
+
+    CloudPtr world(new PointCloudType());
+    pcl::transformPointCloud(*kf->cloud, *world, world_T[iter->second]);
+    *submap += *world;
   }
-
-  return loop_found;
-}
-
-bool LoopClosure::geometricVerification(const KeyFrame& kf1, const KeyFrame& kf2, V3d& rel_p, Qd& rel_q) {
-  if (!kf1.cloud || kf1.cloud->empty() || !kf2.cloud || kf2.cloud->empty()) {
-    return false;
-  }
-
-  // 使用ICP 进行几何验证
-  pcl::IterativeClosestPoint<PointType, PointType> icp;
-  icp.setMaxCorrespondenceDistance(2.0);  // 2米内搜索
-  icp.setMaximumIterations(50);
-  icp.setTransformationEpsilon(1e-6);
-  icp.setEuclideanFitnessEpsilon(0.01);
-
-  // 源：kf2(当前帧) ， 目标：kf1(历史帧)
-  icp.setInputSource(kf2.cloud);
-  icp.setInputTarget(kf1.cloud);
-
-  PointCloudType aligned;
-
-  icp.align(aligned);
-
-  if (!icp.hasConverged() || icp.getFitnessScore() > icp_score_thresh_) {
-    return false;
-  }
-
-  // 获取相对变换
-  M4f T = icp.getFinalTransformation().matrix();
-  rel_p = T.block<3, 1>(0, 3).cast<double>();
-  rel_q = Qd(T.block<3, 3>(0, 0).cast<double>());
-
-  return true;
+  return submap;
 }

@@ -63,7 +63,6 @@ class Frontend {
   /**
    * @brief NDT + IESKF 配准 (每帧点云数据调用)
    *
-   * 新流程 (对齐 slam_tools):
    *   1. reg_->setSource(feature_cloud)
    *   2. ieskf_->updateUsingCustomObserve(lambda) — IEKF 迭代中调用 NDT 回调
    *   3. ieskf_->getNominalState() 获取更新后的状态
