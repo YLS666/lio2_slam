@@ -1,21 +1,25 @@
 #include "frontend/frontend.hpp"
 #include <glog/logging.h>
 #include <pcl/common/transforms.h>
-#include <pcl/filters/voxel_grid.h>
 #include <pcl/io/pcd_io.h>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include "cloud_utils/point_type.hpp"
+#include "utils/parallel.hpp"
 
 Frontend::Frontend(AllConfig config)
-    : is_use_viewer_(config.is_use_ui), last_feature_cloud_(new pcl::PointCloud<PointType>()) {
+    : is_use_viewer_(config.is_use_ui),
+      last_feature_cloud_(new pcl::PointCloud<PointType>()),
+      num_threads_(config.num_threads) {
   // 体素地图
   map_ = std::make_unique<VoxelMap>(0.5f, 20.0f, 4);
+  map_->setNumThreads(num_threads_);
 
   // NDT 配准 (设为 IEKF 回调模式)
   reg_ = std::make_unique<NDTRegistration>(5);
+  reg_->setNumThreads(num_threads_);
   reg_->setHuber(false, 0.0);      // NDT 不需要 Huber
   reg_->setInfoRatio(0.01);        // 信息矩阵缩放 100 倍
   reg_->setOutlierThreshold(5.0);  // 马氏距离阈值
@@ -225,16 +229,19 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
 CloudPtr Frontend::featureSample(const CloudPtr& cloud) const {
   constexpr float VOXEL_SIZE = 0.3f;
 
-  std::unordered_map<VoxelKey, PointType, VoxelHash> voxel_map;
+  tbb::concurrent_unordered_map<VoxelKey, PointType, VoxelHash> voxel_map;
 
-  for (const auto& pt : cloud->points) {
-    VoxelKey key{static_cast<int>(std::floor(pt.x / VOXEL_SIZE)), static_cast<int>(std::floor(pt.y / VOXEL_SIZE)),
-                 static_cast<int>(std::floor(pt.z / VOXEL_SIZE))};
-
-    if (voxel_map.find(key) == voxel_map.end()) {
-      voxel_map[key] = pt;
-    }
-  }
+  tbb::task_arena arena(lio::effectiveThreads(num_threads_));
+  arena.execute([&] {
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, cloud->size(), 4096), [&](const tbb::blocked_range<size_t>& range) {
+      for (size_t i = range.begin(); i != range.end(); ++i) {
+        const auto& pt = (*cloud)[i];
+        VoxelKey key{static_cast<int>(std::floor(pt.x / VOXEL_SIZE)), static_cast<int>(std::floor(pt.y / VOXEL_SIZE)),
+                     static_cast<int>(std::floor(pt.z / VOXEL_SIZE))};
+        voxel_map.emplace(key, pt);  // 已存在则保留首个点, 线程安全
+      }
+    });
+  });
 
   CloudPtr out(new PointCloudType);
   out->reserve(voxel_map.size());
@@ -247,23 +254,42 @@ CloudPtr Frontend::featureSample(const CloudPtr& cloud) const {
 void Frontend::saveMap(const std::string& save_dir) {
   map_->clearAll();
   const auto& kfs = backend_->getKeyFrames();
+  const size_t N = kfs.size();
 
-  for (size_t i = 0; i < kfs.size(); ++i) {
-    const auto& kf = kfs[i];
-    std::string kf_path = save_dir + "kf_" + std::to_string(kf.id) + ".pcd";
+  constexpr size_t kChunk = 256;  // 每批关键帧数, 限制峰值内存
+  std::vector<CloudPtr> batch(kChunk);
 
-    CloudPtr cloud(new PointCloudType());
-    if (pcl::io::loadPCDFile<PointType>(kf_path, *cloud) == -1) {
-      continue;
+  for (size_t base = 0; base < N; base += kChunk) {
+    const size_t end = std::min(base + kChunk, N);
+    const size_t cnt = end - base;
+
+    // 并行: 加载 PCD + 变换到世界系 (I/O 与矩阵乘法并行, 离线不限制核数)
+    tbb::parallel_for(tbb::blocked_range<size_t>(base, end), [&](const tbb::blocked_range<size_t>& range) {
+      for (size_t i = range.begin(); i != range.end(); ++i) {
+        const auto& kf = kfs[i];
+        std::string kf_path = save_dir + "kf_" + std::to_string(kf.id) + ".pcd";
+
+        CloudPtr cloud(new PointCloudType());
+        if (pcl::io::loadPCDFile<PointType>(kf_path, *cloud) == -1) {
+          batch[i - base].reset();
+          continue;
+        }
+
+        M4f T = M4f::Identity();
+        T.block<3, 3>(0, 0) = kf.q.toRotationMatrix().cast<float>();
+        T.block<3, 1>(0, 3) = kf.p.cast<float>();
+
+        batch[i - base] = std::make_shared<PointCloudType>();
+        pcl::transformPointCloud(*cloud, *batch[i - base], T);
+      }
+    });
+
+    // 串行合并进体素地图 (addCloud 内部已并行; 多次调用需串行以保证线程安全)
+    for (size_t i = 0; i < cnt; ++i) {
+      if (batch[i]) {
+        map_->addCloud(batch[i]);
+      }
     }
-
-    M4f T = M4f::Identity();
-    T.block<3, 3>(0, 0) = kf.q.toRotationMatrix().cast<float>();
-    T.block<3, 1>(0, 3) = kf.p.cast<float>();
-
-    CloudPtr world_cloud(new PointCloudType());
-    pcl::transformPointCloud(*cloud, *world_cloud, T);
-    map_->addCloud(world_cloud);
   }
 
   CloudPtr all = map_->getCloud();

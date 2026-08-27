@@ -258,6 +258,7 @@ struct AllConfig {
   std::vector<double> r_lidar_imu;
   double g_norm;
   bool is_use_ui;
+  int num_threads;
 
   bool init(std::string config_file_path) {
     if (!std::filesystem::exists(config_file_path)) {
@@ -278,6 +279,7 @@ struct AllConfig {
     r_lidar_imu = yaml_config.get("r_lidar_imu", std::vector<double>{1, 0, 0, 0, 1, 0, 0, 0, 1});
     g_norm = yaml_config.get("g_norm", 9.80655);
     is_use_ui = yaml_config.get("is_use_ui", true);
+    num_threads = yaml_config.get("num_threads", 0);
 
     return true;
   }

@@ -119,6 +119,9 @@ class VoxelMap {
     active_blocks_.clear();
   }
 
+  /** @brief 设置并行线程数 (0=不限制, >0=限制) */
+  void setNumThreads(int n) { num_threads_ = n; }
+
  private:
   VoxelKey pointToVoxel(const PointType& pt) const;
 
@@ -139,4 +142,6 @@ class VoxelMap {
   static const std::vector<VoxelKey> kCenterOnly;
   static const std::vector<VoxelKey> kNeighborOffset7;
   static const std::vector<VoxelKey> kNeighborOffset27;
+
+  int num_threads_ = 0;  // 0=不限制
 };

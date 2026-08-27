@@ -1,5 +1,6 @@
 #include "frontend/voxel_map.hpp"
 #include <Eigen/Eigenvalues>
+#include "utils/parallel.hpp"
 
 // neighbor
 const std::vector<VoxelKey> VoxelMap::kNeighborOffset7{{0, 0, 0},  {1, 0, 0}, {-1, 0, 0}, {0, 1, 0},
@@ -37,18 +38,45 @@ BlockKey VoxelMap::voxelToBlock(const VoxelKey& key) const {
 }
 
 void VoxelMap::addCloud(const CloudPtr& cloud) {
-  for (const auto& pt : *cloud) {
-    VoxelKey key = pointToVoxel(pt);
+  if (!cloud || cloud->empty()) {
+    return;
+  }
 
-    auto& cell = ndt_map_[key];
+  // 每线程本地累加: 只统计当前点云对每个体素的增量 (不加锁)
+  struct CellAccum {
+    int points_num = 0;
+    V3d sum = V3d::Zero();
+    M3d sum_sq = M3d::Zero();
+  };
+  using LocalMap = std::unordered_map<VoxelKey, CellAccum, VoxelHash>;
 
-    V3d p(pt.x, pt.y, pt.z);
+  tbb::enumerable_thread_specific<LocalMap> local_maps;
 
-    cell.points_num++;
-    cell.sum += p;
-    cell.sum_sq += p * p.transpose();
+  tbb::task_arena arena(lio::effectiveThreads(num_threads_));
+  arena.execute([&] {
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, cloud->size(), 4096), [&](const tbb::blocked_range<size_t>& range) {
+      LocalMap& lm = local_maps.local();
+      for (size_t i = range.begin(); i != range.end(); ++i) {
+        const auto& pt = (*cloud)[i];
+        VoxelKey key = pointToVoxel(pt);
+        CellAccum& a = lm[key];
+        V3d p(pt.x, pt.y, pt.z);
+        a.points_num++;
+        a.sum += p;
+        a.sum_sq += p * p.transpose();
+      }
+    });
+  });
 
-    updateCell(cell);
+  // 串行合并进 ndt_map_ (每个 cell 只被单线程写入), 并只做一次 NDT 估计
+  for (auto& lm : local_maps) {
+    for (auto& kv : lm) {
+      auto& cell = ndt_map_[kv.first];
+      cell.points_num += kv.second.points_num;
+      cell.sum += kv.second.sum;
+      cell.sum_sq += kv.second.sum_sq;
+      updateCell(cell);
+    }
   }
 }
 

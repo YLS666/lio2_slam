@@ -1,8 +1,8 @@
 #include "frontend/registration.hpp"
 #include <glog/logging.h>
-#include <tbb/tbb.h>
 #include "utils/eigen_types.hpp"
 #include "utils/math_types.hpp"
+#include "utils/parallel.hpp"
 
 NDTRegistration::NDTRegistration(int max_iteration) : max_iteration_(max_iteration) {}
 
@@ -123,8 +123,8 @@ int NDTRegistration::computeResidualAndJacobians(const VoxelMap* map, const SE3&
 
   NdtAccumulator acc(map, &source_, input_pose, outlier_th);
 
-  int half_threads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
-  tbb::task_arena arena(half_threads);
+  int num_threads = lio::effectiveThreads(num_threads_);
+  tbb::task_arena arena(num_threads);
   arena.execute([&] { tbb::parallel_reduce(tbb::blocked_range<size_t>(0, N, 256), acc); });
 
   match_count_ = acc.effective;

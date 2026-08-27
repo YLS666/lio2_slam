@@ -126,6 +126,7 @@ class Frontend {
 
   bool last_reg_success_ = false;
   bool diverged_ = false;
+  int num_threads_ = 0;  // 0=不限制
 
   /**
    * @brief 将已优化的关键帧点云合并到地图

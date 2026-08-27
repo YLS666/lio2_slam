@@ -25,4 +25,5 @@ class CloudProcessor {
   Qd q_li_ = Qd::Identity();
   V3d t_li_ = V3d::Zero();
   std::vector<PoseCache> pose_table_;
+  int num_threads_ = 0;  // 0=不限制
 };

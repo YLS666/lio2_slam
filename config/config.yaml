@@ -20,3 +20,5 @@ r_lidar_imu: [ 1, 0, 0, 0, 1, 0, 0, 0, 1 ]
 g_norm: 9.80655
 
 is_use_ui: true
+
+num_threads: 0  #多线程核数: 0=不限制(全部核), >0=限制核数(实时定位预留CPU)
