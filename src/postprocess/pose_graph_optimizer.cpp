@@ -174,7 +174,10 @@ bool globalOptimize(std::deque<KeyFrame>& keyframes, const std::vector<LoopPair>
   }
 
   // 回环约束
-  constexpr double loop_rk_th = 0.2;
+  constexpr double loop_trans_std = 0.20;  // m，回环 NDT 平移精度
+  constexpr double loop_rot_std = 0.03;    // rad，回环 NDT 旋转精度
+  const double w_t = 1.0 / (loop_trans_std * loop_trans_std);
+  const double w_r = 1.0 / (loop_rot_std * loop_rot_std);
   for (const auto& lp : loop_pairs) {
     if (lp.id_a < 0 || lp.id_a >= N || lp.id_b < 0 || lp.id_b >= N) {
       continue;
@@ -185,10 +188,14 @@ bool globalOptimize(std::deque<KeyFrame>& keyframes, const std::vector<LoopPair>
     }
 
     SE3 obs(lp.rel_q, lp.rel_p);
-    Eigen::Matrix<double, 6, 6> loop_info = Eigen::Matrix<double, 6, 6>::Identity() * lp.info_weight * 10.0;
+    Eigen::Matrix<double, 6, 6> loop_info = Eigen::Matrix<double, 6, 6>::Zero();
+    loop_info(0, 0) = loop_info(1, 1) = loop_info(2, 2) = w_t;  // 平移
+    loop_info(3, 3) = loop_info(4, 4) = loop_info(5, 5) = w_r;  // 旋转
+    loop_info *= lp.info_weight;
+
     auto* edge = new postprocess::EdgeRelativeMotion(vertices[lp.id_a], vertices[lp.id_b], obs, loop_info);
     auto rk = new g2o::RobustKernelCauchy();
-    rk->setDelta(loop_rk_th);
+    rk->setDelta(0.2);
     edge->setRobustKernel(rk);
     optimizer.addEdge(edge);
   }
