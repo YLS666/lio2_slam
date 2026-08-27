@@ -208,23 +208,61 @@ bool globalOptimize(std::deque<KeyFrame>& keyframes, const std::vector<LoopPair>
 
 CloudPtr rebuildGlobalMap(const std::deque<KeyFrame>& keyframes, float voxel_size) {
   CloudPtr all(new PointCloudType());
+
+  // 1. 所有 KeyFrame 转到世界坐标系
   for (const auto& kf : keyframes) {
     if (!kf.cloud || kf.cloud->empty()) {
       continue;
     }
 
     CloudPtr world(new PointCloudType());
+
     M4f T = M4f::Identity();
     T.block<3, 3>(0, 0) = kf.q.toRotationMatrix().cast<float>();
     T.block<3, 1>(0, 3) = kf.p.cast<float>();
     pcl::transformPointCloud(*kf.cloud, *world, T);
+
     *all += *world;
   }
 
-  if (voxel_size > 0) {
-    return dsCloud(all, voxel_size);
+  if (voxel_size <= 0.0f) {
+    return all;
   }
-  return all;
+
+  // 2. 按 50m × 50m 进行空间分块
+  std::map<V2i, CloudPtr, less_vec<2>> map_data;
+  for (const auto& pt : all->points) {
+    const int gx = static_cast<int>(std::floor((pt.x - 25.0f) / 50.0f));
+    const int gy = static_cast<int>(std::floor((pt.y - 25.0f) / 50.0f));
+    const V2i key(gx, gy);
+
+    auto iter = map_data.find(key);
+    if (iter == map_data.end()) {
+      CloudPtr cloud(new PointCloudType());
+      cloud->points.emplace_back(pt);
+      cloud->is_dense = false;
+      cloud->height = 1;
+
+      map_data.emplace(key, cloud);
+    } else {
+      iter->second->points.emplace_back(pt);
+    }
+  }
+
+  CloudPtr result(new PointCloudType());
+  for (const auto& iter : map_data) {
+    CloudPtr ds_cloud = dsCloud(iter.second, voxel_size);
+    *result += *ds_cloud;
+  }
+
+  result->width = static_cast<uint32_t>(result->size());
+  result->height = 1;
+  result->is_dense = false;
+
+  LOG(INFO) << "final map:"
+            << " input=" << all->size() << " output=" << result->size();
+
+  return result;
 }
 
 }  // namespace postprocess

@@ -42,6 +42,17 @@ using SE3 = Sophus::SE3d;
 using SE3f = Sophus::SE3f;
 using SO3 = Sophus::SO3d;
 
+/// 矢量比较
+template <int N>
+struct less_vec {
+  inline bool operator()(const Eigen::Matrix<int, N, 1>& v1, const Eigen::Matrix<int, N, 1>& v2) const;
+};
+
+template <>
+inline bool less_vec<2>::operator()(const Eigen::Matrix<int, 2, 1>& v1, const Eigen::Matrix<int, 2, 1>& v2) const {
+  return v1[0] < v2[0] || (v1[0] == v2[0] && v1[1] < v2[1]);
+}
+
 /**
  * @brief 计算向量的反对称矩阵
  */
