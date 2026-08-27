@@ -144,7 +144,7 @@ source install/setup.bash                       # 加载编译产物
 
 整体数据流见下图：
 
-```Mermaid
+```mermaid
 flowchart TD
     %% 样式定义
     classDef source fill:#e6f7ff,stroke:#1890ff
