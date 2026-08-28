@@ -133,8 +133,8 @@ void LoopClosure::computeForCandidate(const std::vector<const KeyFrame*>& kfs, c
   for (double r : resolutions_) {
     ndt.setResolution(static_cast<float>(r));
     // 每次都从原始点云重采样
-    CloudPtr target = dsCloud(target_orig, static_cast<float>(r * 0.1));
-    CloudPtr source = dsCloud(source_orig, static_cast<float>(r * 0.1));
+    CloudPtr target = dsCloud(target_orig, static_cast<float>(r * 0.1), 1);
+    CloudPtr source = dsCloud(source_orig, static_cast<float>(r * 0.1), 1);
     ndt.setInputTarget(target);
     ndt.setInputSource(source);
 

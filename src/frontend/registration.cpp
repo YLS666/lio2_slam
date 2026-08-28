@@ -76,19 +76,16 @@ int NDTRegistration::computeResidualAndJacobians(const VoxelMap* map, const SE3&
         query.y = static_cast<float>(qs.y());
         query.z = static_cast<float>(qs.z());
 
-        NDTCell cell;
-        if (!map->getCell(query, cell, NearbyType::NEARBY6)) {
-          continue;
-        }
-        if (!cell.ndt_estimated) {
+        const NDTCell* cell = map->getCell(query, NearbyType::NEARBY6);
+        if (!cell) {
           continue;
         }
 
         // 残差: e = qs - μ
-        V3d e = qs - cell.mean;
+        V3d e = qs - cell->mean;
 
         // 马氏距离离群检测
-        double maha = e.transpose() * cell.info * e;
+        double maha = e.transpose() * cell->info * e;
         if (float_check::isnan(maha) || maha > outlier_th) {
           continue;
         }
@@ -96,7 +93,7 @@ int NDTRegistration::computeResidualAndJacobians(const VoxelMap* map, const SE3&
         // A = -R · skew(q)  (Jacobian 旋转块)
         M3d A = -pose_R * SO3::hat(q);
 
-        const M3d& W = cell.info;
+        const M3d& W = cell->info;
         M3d WA = W * A;
         V3d We = W * e;
 

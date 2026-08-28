@@ -1,18 +1,14 @@
 #pragma once
 
+#include <pangolin/pangolin.h>
+#include <Eigen/Dense>
 #include <atomic>
 #include <memory>
 #include <mutex>
 #include <thread>
-
-#include <pangolin/pangolin.h>
-#include <Eigen/Dense>
-
 #include "cloud_utils/point_type.hpp"
 #include "utils/eigen_types.hpp"
-
 #include "visualization/viewer_control.hpp"
-#include "visualization/viewer_hud.hpp"
 #include "visualization/viewer_layout.hpp"
 #include "visualization/viewer_plot.hpp"
 #include "visualization/viewer_types.hpp"
@@ -31,13 +27,14 @@ class PangolinViewer {
 
   bool isRunning() const { return running_.load(); }
 
-  //---------------- 数据更新接口 ----------------//
-
+  // 数据更新接口
   void updateCurrentCloud(const CloudPtr& cloud, const Eigen::Matrix4f& T);
 
   void updateLocalMap(const CloudPtr& cloud);
 
-  void appendGlobalMap(const CloudPtr& cloud);
+  void setLocalMapSource(std::function<CloudPtr()> getter);
+
+  void appendGlobalMap(const CloudPtr& cloud, const Eigen::Matrix4f& T);
 
   void clearGlobalMap();
 
@@ -50,17 +47,14 @@ class PangolinViewer {
   void updateMotionInfo(const V3d& vel, const V3d& gyr_raw, const V3d& acc_raw);
 
  private:
-  //---------------- 主循环 ----------------//
-
+  // 主循环
   void run();
 
-  //---------------- 工具 ----------------//
-
+  // 工具
   static Eigen::Vector3f heightToColor(float z, float z_min, float z_max);
 
  private:
-  //---------------- Thread ----------------//
-
+  // Thread
   std::unique_ptr<std::thread> thread_;
 
   std::atomic<bool> running_{false};
@@ -69,8 +63,7 @@ class PangolinViewer {
 
   std::atomic<bool> initialized_{false};
 
-  //---------------- Data ----------------//
-
+  // Data
   std::mutex data_mutex_;
 
   CloudPtr current_cloud_;
@@ -82,6 +75,12 @@ class PangolinViewer {
   CloudPtr local_map_;
 
   CloudPtr global_map_;
+
+  std::function<CloudPtr()> local_map_getter_;  // 由 Frontend 注入, 返回降采样后的局部地图
+
+  std::deque<std::pair<CloudPtr, Eigen::Matrix4f>> pending_global_clouds_;  // 主线程投递的待处理全局点云
+
+  int local_map_refresh_counter_ = 0;
 
   std::deque<viewer::TrajPoint> trajectory_;
 
@@ -97,7 +96,7 @@ class PangolinViewer {
 
   bool global_map_dirty_ = false;
 
-  //---------------- Render Modules ----------------//
+  // Render Modules
   std::unique_ptr<pangolin::OpenGlRenderState> camera_;
 
   pangolin::OpenGlMatrix default_view_;
@@ -106,13 +105,12 @@ class PangolinViewer {
 
   viewer::ViewerPlot plot_;
 
-  //---------------- Color ----------------//
-
+  // Color
   float color_min_z_ = -2.0f;
 
   float color_max_z_ = 5.0f;
 
-  // ---------------- Control ----------------//
+  // Control
   std::shared_ptr<ViewerControl> control_;
 
   V3d current_position_{0, 0, 0};

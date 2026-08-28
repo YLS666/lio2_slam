@@ -42,6 +42,9 @@ Frontend::Frontend(AllConfig config)
 
   // 可视化
   viewer_ = std::make_unique<PangolinViewer>();
+
+  // 启动异步关键帧保存线程
+  save_thread_ = std::thread(&Frontend::saveWorkerLoop, this);
 }
 
 void Frontend::init(const State& init_state) {
@@ -70,7 +73,7 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
   frame_count_++;
 
   // 1. 降采样 + 特征采样
-  CloudPtr ds_cloud = dsCloud(cloud, 0.1f);
+  CloudPtr ds_cloud = dsCloud(cloud, 0.1f, num_threads_);
   auto feature_cloud = featureSample(ds_cloud);
 
   // 2. IEKF + NDT 配准
@@ -194,29 +197,17 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
 
   // 8. 可视化 (高频操作每帧执行, 低频操作隔帧执行以降低CPU)
   if (is_use_viewer_ && viewer_ && viewer_->isRunning()) {
-    // 每帧: 当前点云 + 位姿 (轻量)
-    M4f T_cur = M4f::Identity();
-    T_cur.block<3, 3>(0, 0) = state_.q.toRotationMatrix().cast<float>();
-    T_cur.block<3, 1>(0, 3) = state_.p.cast<float>();
-    viewer_->updateCurrentCloud(cloud, T_cur);  // 只传原始点云 + 位姿, 变换在渲染线程做
+    M4f T = M4f::Identity();
+    T.block<3, 3>(0, 0) = state_.q.toRotationMatrix().cast<float>();
+    T.block<3, 1>(0, 3) = state_.p.cast<float>();
+
+    viewer_->updateCurrentCloud(cloud, T);  // O(1)
     viewer_->updatePose(state_.p, state_.q, state_.timestamp);
     viewer_->updateMotionInfo(state_.v, state_.bg, state_.ba);
 
-    // 每3帧: 局部地图 (getCloud 遍历全部体素, 重)
-    if (frame_count_ % 10 == 0) {
-      auto local_map_cloud = map_->getCloud();
-      CloudPtr ds_local_map = dsCloud(local_map_cloud, 1.0f);
-      viewer_->updateLocalMap(ds_local_map);
-    }
-
-    // 每5帧: 全局轨迹 (appendGlobalMap 累积点云, 持续增长)
+    // 全局地图: 只投递原始点云+位姿 (O(1)), 变换+累积+降采样在渲染线程
     if (frame_count_ % 5 == 0) {
-      CloudPtr world_cloud(new PointCloudType());
-      M4f T_world = M4f::Identity();
-      T_world.block<3, 3>(0, 0) = state_.q.toRotationMatrix().cast<float>();
-      T_world.block<3, 1>(0, 3) = state_.p.cast<float>();
-      pcl::transformPointCloud(*cloud, *world_cloud, T_world);
-      viewer_->appendGlobalMap(world_cloud);
+      viewer_->appendGlobalMap(cloud, T);
     }
   }
 
@@ -225,25 +216,49 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
 
 CloudPtr Frontend::featureSample(const CloudPtr& cloud) const {
   constexpr float VOXEL_SIZE = 0.3f;
+  const size_t N = cloud->size();
+  if (N == 0) {
+    return std::make_shared<PointCloudType>();
+  }
 
-  tbb::concurrent_unordered_map<VoxelKey, PointType, VoxelHash> voxel_map;
+  const float inv = 1.0f / VOXEL_SIZE;
 
+  // 1. 并行算每个点的体素 key, 打包成 64 位整数 (替代并发哈希表: 无锁无节点分配)
+  //    体素坐标范围 |v| < 2^20 (0.3m 体素下约 ±31 万米), 每维占 21 bit, 区间内无碰撞
+  std::vector<uint64_t> keys(N);
+  std::vector<uint32_t> idx(N);
   tbb::task_arena arena(lio::effectiveThreads(num_threads_));
   arena.execute([&] {
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, cloud->size(), 4096), [&](const tbb::blocked_range<size_t>& range) {
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, N, 4096), [&](const tbb::blocked_range<size_t>& range) {
       for (size_t i = range.begin(); i != range.end(); ++i) {
         const auto& pt = (*cloud)[i];
-        VoxelKey key{static_cast<int>(std::floor(pt.x / VOXEL_SIZE)), static_cast<int>(std::floor(pt.y / VOXEL_SIZE)),
-                     static_cast<int>(std::floor(pt.z / VOXEL_SIZE))};
-        voxel_map.emplace(key, pt);  // 已存在则保留首个点, 线程安全
+        int64_t vx = static_cast<int64_t>(std::floor(pt.x * inv));
+        int64_t vy = static_cast<int64_t>(std::floor(pt.y * inv));
+        int64_t vz = static_cast<int64_t>(std::floor(pt.z * inv));
+        keys[i] = (static_cast<uint64_t>(vx & 0x1FFFFF) << 42) | (static_cast<uint64_t>(vy & 0x1FFFFF) << 21) |
+                  static_cast<uint64_t>(vz & 0x1FFFFF);
+        idx[i] = static_cast<uint32_t>(i);
       }
     });
   });
 
+  // 2. 按 (key, 索引) 排序: 同 key 内索引升序, 复现原"保留首个点"语义
+  tbb::parallel_sort(idx.begin(), idx.end(), [&](uint32_t a, uint32_t b) {
+    if (keys[a] != keys[b]) {
+      return keys[a] < keys[b];
+    }
+    return a < b;
+  });
+
+  // 3. 顺序去重: 每个 key 保留最小索引点
   CloudPtr out(new PointCloudType);
-  out->reserve(voxel_map.size());
-  for (const auto& kv : voxel_map) {
-    out->push_back(kv.second);
+  out->reserve(N);
+  uint64_t prev = std::numeric_limits<uint64_t>::max();
+  for (uint32_t i : idx) {
+    if (keys[i] != prev) {
+      out->push_back((*cloud)[i]);
+      prev = keys[i];
+    }
   }
   return out;
 }
@@ -416,6 +431,11 @@ void Frontend::propagateFromTrustedPose(const std::deque<Imu>& imu_datas, double
 
 void Frontend::initViewer() {
   if (is_use_viewer_ && viewer_ && !viewer_->isRunning()) {
+    // 注入局部地图拉取回调: 渲染线程自己调 map_->getCloud() + 降采样
+    viewer_->setLocalMapSource([this]() {
+      CloudPtr c = map_->getCloud();
+      return dsCloud(c, 1.0f);
+    });
     viewer_->start();
   }
 }
