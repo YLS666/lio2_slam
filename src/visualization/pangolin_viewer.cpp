@@ -3,10 +3,9 @@
 #include <glog/logging.h>
 #include <pangolin/gl/gl.h>
 #include <pangolin/gl/opengl_render_state.h>
-
+#include <pcl/common/transforms.h>
 #include <chrono>
 #include <thread>
-
 #include "cloud_utils/point_type.hpp"
 #include "visualization/viewer_control.hpp"
 #include "visualization/viewer_gl_utils.hpp"
@@ -14,6 +13,7 @@
 
 PangolinViewer::PangolinViewer() {
   current_cloud_.reset(new PointCloudType());
+  raw_current_cloud_.reset(new PointCloudType());
   local_map_.reset(new PointCloudType());
   global_map_.reset(new PointCloudType());
 
@@ -64,9 +64,10 @@ void PangolinViewer::stop() {
   LOG(INFO) << "PangolinViewer stopped";
 }
 
-void PangolinViewer::updateCurrentCloud(const CloudPtr& cloud) {
+void PangolinViewer::updateCurrentCloud(const CloudPtr& cloud, const Eigen::Matrix4f& T) {
   std::lock_guard<std::mutex> lock(data_mutex_);
-  *current_cloud_ = *cloud;
+  raw_current_cloud_ = cloud;  // shared_ptr 赋值, O(1)
+  current_T_ = T;
   current_cloud_dirty_ = true;
 }
 
@@ -218,7 +219,7 @@ void PangolinViewer::run() {
         std::lock_guard<std::mutex> lock(data_mutex_);
 
         if (current_cloud_dirty_) {
-          *cache.current_cloud = *current_cloud_;
+          pcl::transformPointCloud(*raw_current_cloud_, *cache.current_cloud, current_T_);  // 变换移到渲染线程
           current_cloud_dirty_ = false;
         }
 

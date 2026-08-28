@@ -33,7 +33,7 @@ class PangolinViewer {
 
   //---------------- 数据更新接口 ----------------//
 
-  void updateCurrentCloud(const CloudPtr& cloud);
+  void updateCurrentCloud(const CloudPtr& cloud, const Eigen::Matrix4f& T);
 
   void updateLocalMap(const CloudPtr& cloud);
 
@@ -74,6 +74,10 @@ class PangolinViewer {
   std::mutex data_mutex_;
 
   CloudPtr current_cloud_;
+
+  CloudPtr raw_current_cloud_;  // 只存指针, 不拷贝
+
+  Eigen::Matrix4f current_T_ = Eigen::Matrix4f::Identity();
 
   CloudPtr local_map_;
 

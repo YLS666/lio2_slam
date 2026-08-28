@@ -142,49 +142,48 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
   bool is_keyframe = backend_->addKeyFrame(state_, feature_cloud, info_mat, effective_points, ndt_rot_correction);
 
   if (is_keyframe) {
-    // 保存关键帧点云 + 位姿
     if (!kf_save_dir.empty()) {
-      // 每次程序运行只清空一次目录，避免上一次运行残留的数据混入
       static bool kf_dir_cleared = false;
       if (!kf_dir_cleared) {
         if (std::filesystem::exists(kf_save_dir)) {
           std::filesystem::remove_all(kf_save_dir);
         }
         std::filesystem::create_directories(kf_save_dir);
+        // 文件头只同步写一次
+        std::string pose_path = kf_save_dir + "keyframe_poses.txt";
+        std::ofstream fout(pose_path);
+        if (fout.is_open()) {
+          fout << "# id timestamp px py pz qx qy qz qw i00 i01 ... i55\n";
+        }
+        fout.close();
         kf_dir_cleared = true;
       }
 
       const auto& kfs = backend_->getKeyFrames();
       const auto& kf = kfs.back();
 
-      std::string kf_path = kf_save_dir + "kf_" + std::to_string(kf.id) + ".pcd";
-      pcl::io::savePCDFileBinary(kf_path, *feature_cloud);
-
-      // 追加关键帧位姿到文本文件 (每行: id timestamp px py pz qx qy qz qw i00..i55)
-      std::string pose_path = kf_save_dir + "keyframe_poses.txt";
-      bool write_header = !std::filesystem::exists(pose_path);
-      std::ofstream fout(pose_path, std::ios::app);
-      if (fout.is_open()) {
-        fout << std::fixed << std::setprecision(9);
-        if (write_header) {
-          fout << "# id timestamp px py pz qx qy qz qw i00 i01 ... i55\n";
+      // 主线程只拼字符串 (很快), 磁盘写交给后台线程
+      std::ostringstream oss;
+      oss << std::fixed << std::setprecision(9);
+      const Qd& q = kf.q;
+      oss << kf.id << " " << kf.timestamp << " " << kf.p.x() << " " << kf.p.y() << " " << kf.p.z() << " " << q.x()
+          << " " << q.y() << " " << q.z() << " " << q.w();
+      for (int r = 0; r < 6; ++r) {
+        for (int c = 0; c < 6; ++c) {
+          oss << " " << kf.info_mat(r, c);
         }
-        const Qd& q = kf.q;
-        fout << kf.id << " " << kf.timestamp << " " << kf.p.x() << " " << kf.p.y() << " " << kf.p.z() << " " << q.x()
-             << " " << q.y() << " " << q.z() << " " << q.w();
-        for (int r = 0; r < 6; ++r) {
-          for (int c = 0; c < 6; ++c) {
-            fout << " " << kf.info_mat(r, c);
-          }
-        }
-        fout << "\n";
-        fout.close();
-      } else {
-        LOG(ERROR) << "无法写入关键帧位姿文件: " << pose_path;
       }
+      oss << "\n";
+
+      {
+        std::lock_guard<std::mutex> lock(save_mtx_);
+        save_queue_.push_back({kf_save_dir + "kf_" + std::to_string(kf.id) + ".pcd", kf_save_dir + "keyframe_poses.txt",
+                               feature_cloud, oss.str()});
+      }
+      save_cv_.notify_one();
     }
 
-    // 仅合并到临时地图 (供在线可视化 / 临时 all_map 查看)，不做任何优化/回环
+    // 这个必须留在主线程: 会修改被下一帧 NDT 使用的体素地图
     mergeOptimizedKeyframesToMap();
   }
 
@@ -196,17 +195,15 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
   // 8. 可视化 (高频操作每帧执行, 低频操作隔帧执行以降低CPU)
   if (is_use_viewer_ && viewer_ && viewer_->isRunning()) {
     // 每帧: 当前点云 + 位姿 (轻量)
-    CloudPtr world_current_cloud(new PointCloudType());
     M4f T_cur = M4f::Identity();
     T_cur.block<3, 3>(0, 0) = state_.q.toRotationMatrix().cast<float>();
     T_cur.block<3, 1>(0, 3) = state_.p.cast<float>();
-    pcl::transformPointCloud(*cloud, *world_current_cloud, T_cur);
-    viewer_->updateCurrentCloud(world_current_cloud);
+    viewer_->updateCurrentCloud(cloud, T_cur);  // 只传原始点云 + 位姿, 变换在渲染线程做
     viewer_->updatePose(state_.p, state_.q, state_.timestamp);
     viewer_->updateMotionInfo(state_.v, state_.bg, state_.ba);
 
     // 每3帧: 局部地图 (getCloud 遍历全部体素, 重)
-    if (frame_count_ % 3 == 0) {
+    if (frame_count_ % 10 == 0) {
       auto local_map_cloud = map_->getCloud();
       CloudPtr ds_local_map = dsCloud(local_map_cloud, 1.0f);
       viewer_->updateLocalMap(ds_local_map);
@@ -420,5 +417,38 @@ void Frontend::propagateFromTrustedPose(const std::deque<Imu>& imu_datas, double
 void Frontend::initViewer() {
   if (is_use_viewer_ && viewer_ && !viewer_->isRunning()) {
     viewer_->start();
+  }
+}
+
+void Frontend::saveWorkerLoop() {
+  while (true) {
+    SaveTask task;
+    {
+      std::unique_lock<std::mutex> lock(save_mtx_);
+      save_cv_.wait(lock, [&] { return save_stop_ || !save_queue_.empty(); });
+      if (save_stop_ && save_queue_.empty()) {
+        return;  // 队列清空后才退出
+      }
+      task = std::move(save_queue_.front());
+      save_queue_.pop_front();
+    }
+
+    pcl::io::savePCDFileBinary(task.pcd_path, *task.cloud);
+    std::ofstream fout(task.pose_path, std::ios::app);
+    if (fout.is_open()) {
+      fout << task.pose_line;
+    }
+    fout.close();
+  }
+}
+
+void Frontend::stopSaveWorker() {
+  {
+    std::lock_guard<std::mutex> lock(save_mtx_);
+    save_stop_ = true;
+  }
+  save_cv_.notify_all();
+  if (save_thread_.joinable()) {
+    save_thread_.join();
   }
 }
