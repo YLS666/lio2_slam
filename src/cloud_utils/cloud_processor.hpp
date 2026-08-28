@@ -22,7 +22,8 @@ class CloudProcessor {
   void pre_process(const PointCloud2SharedPtr& cloud, FullCloudPtr& out_cloud);
 
  private:
-  Qd q_il_ = Qd::Identity();
-  V3d t_il_ = V3d::Zero();
+  Qd q_li_ = Qd::Identity();
+  V3d t_li_ = V3d::Zero();
   std::vector<PoseCache> pose_table_;
+  int num_threads_ = 0;  // 0=不限制
 };

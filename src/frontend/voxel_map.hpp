@@ -17,18 +17,6 @@ struct VoxelKey {
   bool operator==(const VoxelKey& other) const { return x == other.x && y == other.y && z == other.z; }
 };
 
-struct VoxelHash {
-  size_t operator()(const VoxelKey& k) const {
-    size_t h = static_cast<size_t>(k.x) * 73856093;
-
-    h ^= static_cast<size_t>(k.y) * 19349663;
-
-    h ^= static_cast<size_t>(k.z) * 83492791;
-
-    return h;
-  }
-};
-
 // block key
 struct BlockKey {
   int bx;
@@ -80,6 +68,123 @@ enum class NearbyType {
 
 };
 
+// 打包体素键: 3×int → uint64
+// 21bit/维, 偏移编码保证符号可还原(供 setLocalCenter 还原 block 用)
+// 范围 ±2^20 个体素, 0.5m 体素下约 ±524km, 远超实际场景
+inline uint64_t packVoxelKey(int x, int y, int z) {
+  constexpr int64_t OFF = 1 << 20;
+  return (static_cast<uint64_t>(x + OFF) << 42) | (static_cast<uint64_t>(y + OFF) << 21) |
+         static_cast<uint64_t>(z + OFF);
+}
+
+inline VoxelKey unpackVoxelKey(uint64_t key) {
+  constexpr int64_t OFF = 1 << 20;
+  return {static_cast<int>((key >> 42) & 0x1FFFFF) - static_cast<int>(OFF),
+          static_cast<int>((key >> 21) & 0x1FFFFF) - static_cast<int>(OFF),
+          static_cast<int>((key >> 0) & 0x1FFFFF) - static_cast<int>(OFF)};
+}
+
+// 扁平开地址哈希表 (替代 tbb::concurrent_unordered_map)
+// 快在哪: 连续内存(keys_/cells_ 两个 vector), find 顺序探测无链表指针追逐;
+// 写全在 map_mutex_ 下串行, 读不与写并发, 所以无需 "concurrent"
+class FlatVoxelMap {
+ public:
+  static constexpr uint64_t kEmpty = 0xFFFFFFFFFFFFFFFFULL;  // 空槽(打包键 bit63 恒 0)
+
+  void clear() {
+    std::fill(keys_.begin(), keys_.end(), kEmpty);
+    count_ = 0;
+  }
+  size_t size() const { return count_; }
+  void reserve(size_t n) {
+    if (keys_.size() >= n * 2) {
+      return;
+    }
+    rehash(std::max<size_t>(16, n * 2));
+  }
+
+  const NDTCell* find(uint64_t key) const {
+    if (keys_.empty()) {
+      return nullptr;
+    }
+    const size_t mask = keys_.size() - 1;
+    size_t i = mix(key) & mask;
+    while (keys_[i] != kEmpty) {
+      if (keys_[i] == key) {
+        return &cells_[i];
+      }
+      i = (i + 1) & mask;
+    }
+    return nullptr;
+  }
+
+  NDTCell& operator[](uint64_t key) {
+    if (count_ * 2 >= keys_.size()) {
+      rehash(keys_.empty() ? 16 : keys_.size() * 2);
+    }
+    const size_t mask = keys_.size() - 1;
+    size_t i = mix(key) & mask;
+    while (keys_[i] != kEmpty && keys_[i] != key) i = (i + 1) & mask;
+    if (keys_[i] == kEmpty) {
+      keys_[i] = key;
+      cells_[i] = NDTCell();
+      ++count_;
+    }
+    return cells_[i];
+  }
+
+  template <typename F>
+  void forEach(const F& f) const {
+    for (size_t i = 0; i < keys_.size(); ++i) {
+      if (keys_[i] != kEmpty) f(keys_[i], cells_[i]);
+    }
+  }
+
+ private:
+  static uint64_t mix(uint64_t x) {  // splitmix64 最终化, 打散连续体素键的低位结构
+    x ^= x >> 30;
+    x *= 0xbf58476d1ce4e5b9ULL;
+    x ^= x >> 27;
+    x *= 0x94d049bb133111ebULL;
+    x ^= x >> 31;
+    return x;
+  }
+
+  void rehash(size_t want_cap) {
+    size_t cap = 1;
+    while (cap < want_cap) {
+      cap <<= 1;
+    }
+
+    std::vector<uint64_t> old_keys;
+    std::vector<NDTCell> old_cells;
+    old_keys.swap(keys_);
+    old_cells.swap(cells_);
+
+    keys_.assign(cap, kEmpty);
+    cells_.assign(cap, NDTCell());
+    count_ = 0;
+
+    const size_t mask = cap - 1;
+    for (size_t i = 0; i < old_keys.size(); ++i) {
+      if (old_keys[i] == kEmpty) {
+        continue;
+      }
+      size_t j = mix(old_keys[i]) & mask;
+      while (keys_[j] != kEmpty) {
+        j = (j + 1) & mask;
+      }
+      keys_[j] = old_keys[i];
+      cells_[j] = old_cells[i];
+      ++count_;
+    }
+  }
+
+  std::vector<uint64_t> keys_;
+  std::vector<NDTCell> cells_;
+  size_t count_ = 0;
+};
+
 class VoxelMap {
  public:
   explicit VoxelMap(float voxel_size = 0.5f, float block_size = 20.0f, int local_block_radius = 2);
@@ -94,7 +199,7 @@ class VoxelMap {
   /**
    * @brief 查询附近NDT voxel
    */
-  bool getCell(const PointType& pt, NDTCell& cell, NearbyType nearby = NearbyType::NEARBY6) const;
+  const NDTCell* getCell(const PointType& pt, NearbyType nearby = NearbyType::NEARBY6) const;
 
   /**
    * @brief 检查查询点附近是否存在已估计的NDT体素
@@ -115,9 +220,13 @@ class VoxelMap {
   CloudPtr getCloud() const;
 
   void clearAll() {
+    std::lock_guard<std::mutex> lock(map_mutex_);
     ndt_map_.clear();
     active_blocks_.clear();
   }
+
+  /** @brief 设置并行线程数 (0=不限制, >0=限制) */
+  void setNumThreads(int n) { num_threads_ = n; }
 
  private:
   VoxelKey pointToVoxel(const PointType& pt) const;
@@ -131,7 +240,7 @@ class VoxelMap {
   float block_size_;
   int local_block_radius_;
 
-  tbb::concurrent_unordered_map<VoxelKey, NDTCell, VoxelHash> ndt_map_;
+  FlatVoxelMap ndt_map_;
   tbb::concurrent_unordered_map<BlockKey, int, BlockHash> active_blocks_;
 
   BlockKey last_block_center_{0, 0, 0};
@@ -139,4 +248,7 @@ class VoxelMap {
   static const std::vector<VoxelKey> kCenterOnly;
   static const std::vector<VoxelKey> kNeighborOffset7;
   static const std::vector<VoxelKey> kNeighborOffset27;
+
+  int num_threads_ = 0;           // 0=不限制
+  mutable std::mutex map_mutex_;  // 保护 ndt_map_ 的写/遍历 (addCloud/getCloud/setLocalCenter)
 };

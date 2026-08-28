@@ -45,6 +45,9 @@ class NDTRegistration {
   /** @brief 设置马氏距离离群阈值  */
   void setOutlierThreshold(double th) { res_outlier_th_ = th; }
 
+  /** @brief 设置并行线程数 (0=不限制, >0=限制) */
+  void setNumThreads(int n) { num_threads_ = n; }
+
  private:
   double huberWeight(double error) const;
 
@@ -58,4 +61,6 @@ class NDTRegistration {
   Eigen::Matrix<double, 6, 6> covariance_ = Eigen::Matrix<double, 6, 6>::Identity();
 
   CloudPtr source_ = nullptr;
+
+  int num_threads_ = 0;  // 0=不限制
 };

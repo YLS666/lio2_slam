@@ -254,10 +254,11 @@ struct AllConfig {
   std::string odom_topic;
   std::string map_topic;
   std::string deskew_cloud_topic;
-  std::vector<double> t_imu_lidar;
-  std::vector<double> r_imu_lidar;
+  std::vector<double> t_lidar_imu;
+  std::vector<double> r_lidar_imu;
   double g_norm;
-  bool is_use_imu;
+  bool is_use_ui;
+  int num_threads;
 
   bool init(std::string config_file_path) {
     if (!std::filesystem::exists(config_file_path)) {
@@ -274,10 +275,11 @@ struct AllConfig {
     odom_topic = yaml_config.get("odom_topic", std::string("/odom"));
     map_topic = yaml_config.get("map_topic", std::string("/map"));
     deskew_cloud_topic = yaml_config.get("deskew_cloud_topic", std::string("/deskew_cloud"));
-    t_imu_lidar = yaml_config.get("t_imu_lidar", std::vector<double>{-0.011, -0.02329, 0.04412});
-    r_imu_lidar = yaml_config.get("r_imu_lidar", std::vector<double>{1, 0, 0, 0, 1, 0, 0, 0, 1});
+    t_lidar_imu = yaml_config.get("t_lidar_imu", std::vector<double>{-0.011, -0.02329, 0.04412});
+    r_lidar_imu = yaml_config.get("r_lidar_imu", std::vector<double>{1, 0, 0, 0, 1, 0, 0, 0, 1});
     g_norm = yaml_config.get("g_norm", 9.80655);
-    is_use_imu = yaml_config.get("is_use_imu", true);
+    is_use_ui = yaml_config.get("is_use_ui", true);
+    num_threads = yaml_config.get("num_threads", 0);
 
     return true;
   }

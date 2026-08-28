@@ -1,5 +1,6 @@
 #include "frontend/voxel_map.hpp"
 #include <Eigen/Eigenvalues>
+#include "utils/parallel.hpp"
 
 // neighbor
 const std::vector<VoxelKey> VoxelMap::kNeighborOffset7{{0, 0, 0},  {1, 0, 0}, {-1, 0, 0}, {0, 1, 0},
@@ -37,18 +38,45 @@ BlockKey VoxelMap::voxelToBlock(const VoxelKey& key) const {
 }
 
 void VoxelMap::addCloud(const CloudPtr& cloud) {
-  for (const auto& pt : *cloud) {
-    VoxelKey key = pointToVoxel(pt);
+  std::lock_guard<std::mutex> lock(map_mutex_);
+  if (!cloud || cloud->empty()) {
+    return;
+  }
 
-    auto& cell = ndt_map_[key];
+  struct CellAccum {
+    int points_num = 0;
+    V3d sum = V3d::Zero();
+    M3d sum_sq = M3d::Zero();
+  };
+  using LocalMap = std::unordered_map<uint64_t, CellAccum>;  // 键已打包, 默认 hash 即可
 
-    V3d p(pt.x, pt.y, pt.z);
+  tbb::enumerable_thread_specific<LocalMap> local_maps;
 
-    cell.points_num++;
-    cell.sum += p;
-    cell.sum_sq += p * p.transpose();
+  tbb::task_arena arena(lio::effectiveThreads(num_threads_));
+  arena.execute([&] {
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, cloud->size(), 4096), [&](const tbb::blocked_range<size_t>& range) {
+      LocalMap& lm = local_maps.local();
+      for (size_t i = range.begin(); i != range.end(); ++i) {
+        const auto& pt = (*cloud)[i];
+        VoxelKey vk = pointToVoxel(pt);
+        uint64_t key = packVoxelKey(vk.x, vk.y, vk.z);
+        CellAccum& a = lm[key];
+        V3d p(pt.x, pt.y, pt.z);
+        a.points_num++;
+        a.sum += p;
+        a.sum_sq += p * p.transpose();
+      }
+    });
+  });
 
-    updateCell(cell);
+  for (auto& lm : local_maps) {
+    for (auto& kv : lm) {
+      auto& cell = ndt_map_[kv.first];
+      cell.points_num += kv.second.points_num;
+      cell.sum += kv.second.sum;
+      cell.sum_sq += kv.second.sum_sq;
+      updateCell(cell);
+    }
   }
 }
 
@@ -89,7 +117,7 @@ void VoxelMap::updateCell(NDTCell& cell) {
   cell.ndt_estimated = true;
 }
 
-bool VoxelMap::getCell(const PointType& pt, NDTCell& cell, NearbyType nearby) const {
+const NDTCell* VoxelMap::getCell(const PointType& pt, NearbyType nearby) const {
   VoxelKey center = pointToVoxel(pt);
 
   const auto& offsets = (nearby == NearbyType::NEARBY26) ? kNeighborOffset27
@@ -98,50 +126,41 @@ bool VoxelMap::getCell(const PointType& pt, NDTCell& cell, NearbyType nearby) co
 
   for (const auto& off : offsets) {
     VoxelKey key{center.x + off.x, center.y + off.y, center.z + off.z};
-
-    auto iter = ndt_map_.find(key);
-
-    if (iter == ndt_map_.end()) {
+    const NDTCell* cell = ndt_map_.find(packVoxelKey(key.x, key.y, key.z));
+    if (!cell) {
       continue;
     }
-
-    if (!iter->second.ndt_estimated) {
+    if (!cell->ndt_estimated) {
       continue;
     }
-
-    cell = iter->second;
-
-    return true;
+    return cell;
   }
-
-  return false;
+  return nullptr;
 }
 
 bool VoxelMap::hasNearbyCell(const PointType& pt, NearbyType nearby) const {
   VoxelKey center = pointToVoxel(pt);
 
-  // CENTER: 仅检查中心体素; NEARBY6: 7邻域; NEARBY26: 27邻域
   const auto& offsets = (nearby == NearbyType::NEARBY26) ? kNeighborOffset27
                         : (nearby == NearbyType::CENTER) ? kCenterOnly
-                                                         : kNeighborOffset7;  // NEARBY6
+                                                         : kNeighborOffset7;
 
   for (const auto& off : offsets) {
     VoxelKey key{center.x + off.x, center.y + off.y, center.z + off.z};
-
-    auto iter = ndt_map_.find(key);
-    if (iter == ndt_map_.end()) {
+    const NDTCell* cell = ndt_map_.find(packVoxelKey(key.x, key.y, key.z));
+    if (!cell) {
       continue;
     }
-
-    if (!iter->second.ndt_estimated) {
+    if (!cell->ndt_estimated) {
       continue;
     }
+    return true;
   }
-
   return false;
 }
 
 void VoxelMap::setLocalCenter(const V3d& center) {
+  std::lock_guard<std::mutex> lock(map_mutex_);
   int vpb = static_cast<int>(block_size_ / voxel_size_);
 
   VoxelKey cv{static_cast<int>(std::floor(center.x() / voxel_size_)),
@@ -157,7 +176,6 @@ void VoxelMap::setLocalCenter(const V3d& center) {
   last_block_center_ = cb;
 
   tbb::concurrent_unordered_map<BlockKey, int, BlockHash> active;
-
   for (int x = -local_block_radius_; x <= local_block_radius_; x++) {
     for (int y = -local_block_radius_; y <= local_block_radius_; y++) {
       for (int z = -local_block_radius_; z <= local_block_radius_; z++) {
@@ -166,37 +184,33 @@ void VoxelMap::setLocalCenter(const V3d& center) {
     }
   }
 
-  for (auto iter = ndt_map_.begin(); iter != ndt_map_.end();) {
-    BlockKey bk = voxelToBlock(iter->first);
-
-    if (active.find(bk) == active.end()) {
-      iter = ndt_map_.unsafe_erase(iter);
-
-    } else {
-      ++iter;
+  FlatVoxelMap kept;
+  kept.reserve(ndt_map_.size());
+  ndt_map_.forEach([&](uint64_t key, const NDTCell& cell) {
+    VoxelKey vk = unpackVoxelKey(key);
+    BlockKey bk{vk.x / vpb, vk.y / vpb, vk.z / vpb};
+    if (active.find(bk) != active.end()) {
+      kept[key] = cell;
     }
-  }
+  });
+  ndt_map_ = std::move(kept);
 
   active_blocks_ = std::move(active);
 }
 
 CloudPtr VoxelMap::getCloud() const {
+  std::lock_guard<std::mutex> lock(map_mutex_);
   CloudPtr cloud(new PointCloudType());
-
   cloud->reserve(ndt_map_.size());
-
-  for (const auto& kv : ndt_map_) {
-    if (!kv.second.ndt_estimated) {
-      continue;
+  ndt_map_.forEach([&](uint64_t /*key*/, const NDTCell& cell) {
+    if (!cell.ndt_estimated) {
+      return;
     }
-
     PointType pt;
-    pt.x = static_cast<float>(kv.second.mean.x());
-    pt.y = static_cast<float>(kv.second.mean.y());
-    pt.z = static_cast<float>(kv.second.mean.z());
-
+    pt.x = static_cast<float>(cell.mean.x());
+    pt.y = static_cast<float>(cell.mean.y());
+    pt.z = static_cast<float>(cell.mean.z());
     cloud->push_back(pt);
-  }
-
+  });
   return cloud;
 }

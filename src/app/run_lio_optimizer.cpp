@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include "config_def.hpp"
 #include "postprocess/pose_graph_optimizer.hpp"
 
 int main(int argc, char** argv) {
@@ -22,9 +23,17 @@ int main(int argc, char** argv) {
   FLAGS_max_log_size = 20;        // 单个日志文件最大 20MB
   FLAGS_file_line_printf = true;  // 日志中打印文件位置
   FLAGS_rfc3339_format = false;   // 不使用RFC3339格式
-  // FLAGS_logbuflevel = -1;       // 可选: 关闭缓存立即刷盘
+                                  // FLAGS_logbuflevel = -1;       // 可选: 关闭缓存立即刷盘
 
-  std::string slam_data = std::string(std::getenv("HOME")) + "/data/slam_tools/map/map_0/test/";
+  std::string CONFIG_PATH = "./src/lio2_slam/config/config.yaml";
+  AllConfig config;
+  if (!config.init(CONFIG_PATH)) {
+    LOG(ERROR) << "配置文件加载失败: " << CONFIG_PATH;
+    return -1;
+  }
+  LOG(INFO) << "配置文件加载成功: " << CONFIG_PATH;
+
+  std::string slam_data = config.save_map_path;
   std::string pose_file = slam_data + "keyframe_poses.txt";
   std::string cloud_dir = slam_data;
   std::string out_pose_file = slam_data + "optimized_poses.txt";

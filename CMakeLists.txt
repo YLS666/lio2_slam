@@ -71,7 +71,7 @@ include_directories (/usr/local/include)
 find_library (G2O_CORE g2o_core /usr/local/lib)
 find_library (G2O_STUFF g2o_stuff /usr/local/lib)
 find_library (G2O_SOLVER_CHOLMOD g2o_solver_cholmod /usr/local/lib)
-find_library (G2O_SOLVER_DENSE g2o_solver_dense /usr/local/ib)
+find_library (G2O_SOLVER_DENSE g2o_solver_dense /usr/local/lib)
 find_library (G2O_TYPES_SLAM3D g2o_types_slam3d /usr/local/lib)
 
 set (G2O_LIBRARIES ${G2O_CORE} ${G2O_STUFF} ${G2O_SOLVER_CHOLMOD}

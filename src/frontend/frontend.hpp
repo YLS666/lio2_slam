@@ -1,5 +1,6 @@
 #pragma once
 
+#include <condition_variable>
 #include <memory>
 #include "backend/backend.hpp"
 #include "cloud_utils/point_type.hpp"
@@ -105,6 +106,9 @@ class Frontend {
     }
   }
 
+  /** @brief 停止异步保存线程 (会先写完队列里剩余任务) */
+  void stopSaveWorker();
+
  private:
   // 核心组件
   std::unique_ptr<VoxelMap> map_;
@@ -126,9 +130,25 @@ class Frontend {
 
   bool last_reg_success_ = false;
   bool diverged_ = false;
+  int num_threads_ = 0;  // 0=不限制
 
   /**
    * @brief 将已优化的关键帧点云合并到地图
    */
   void mergeOptimizedKeyframesToMap();
+
+  // 异步关键帧保存
+  struct SaveTask {
+    std::string pcd_path;
+    std::string pose_path;
+    CloudPtr cloud;         // shared_ptr, 保活点云
+    std::string pose_line;  // 已格式化好的数据行
+  };
+  std::thread save_thread_;
+  std::mutex save_mtx_;
+  std::condition_variable save_cv_;
+  std::deque<SaveTask> save_queue_;
+  bool save_stop_ = false;
+
+  void saveWorkerLoop();
 };

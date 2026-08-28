@@ -1,15 +1,13 @@
 #include "cloud_utils/cloud_processor.hpp"
 #include <glog/logging.h>
-#include <pcl/filters/voxel_grid.h>
 #include <rcl/time.h>
-#include <tbb/blocked_range.h>
-#include <tbb/parallel_for.h>
 #include <chrono>
 #include "utils/math_types.hpp"
+#include "utils/parallel.hpp"
 
 CloudProcessor::CloudProcessor(AllConfig& config) {
-  q_il_ = vecToMat(config.r_imu_lidar).normalized();
-  t_il_ = V3d(config.t_imu_lidar.data());
+  q_li_ = vecToMat(config.r_lidar_imu).normalized();
+  t_li_ = V3d(config.t_lidar_imu.data());
 }
 
 void CloudProcessor::pre_process(const PointCloud2SharedPtr& cloud, FullCloudPtr& out_cloud) {
@@ -152,43 +150,44 @@ CloudPtr CloudProcessor::process(const MeasureGroup& measures, ImuProcessor* imu
   }
 
   // TBB 并行 deskew
-  tbb::parallel_for(tbb::blocked_range<size_t>(0, cloud->size(), 1024),
+  tbb::task_arena arena(lio::effectiveThreads(num_threads_));
+  arena.execute([&] {
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, cloud->size(), 1024), [&](const tbb::blocked_range<size_t>& range) {
+      V3d p_lidar;
+      V3d p_imu;
+      V3d p_world;
+      V3d p_end;
 
-                    [&](const tbb::blocked_range<size_t>& range) {
-                      V3d p_lidar;
-                      V3d p_imu;
-                      V3d p_world;
-                      V3d p_end;
+      for (size_t i = range.begin(); i < range.end(); ++i) {
+        const auto& pt = cloud->points[i];
 
-                      for (size_t i = range.begin(); i < range.end(); ++i) {
-                        const auto& pt = cloud->points[i];
+        auto& new_pt = output_cloud->points[i];
 
-                        auto& new_pt = output_cloud->points[i];
+        // 点时间
+        double pt_offset = pt.timestamp;  // 秒级偏移，无需再乘 1e-9
+        size_t pose_idx = static_cast<size_t>(pt_offset / POSE_DT);
+        // 防止越界
+        pose_idx = std::min(pose_idx, pose_table_.size() - 1);
+        // pose
+        const auto& pose = pose_table_[pose_idx];
 
-                        // 点时间
-                        double pt_offset = pt.timestamp;  // 秒级偏移，无需再乘 1e-9
-                        size_t pose_idx = static_cast<size_t>(pt_offset / POSE_DT);
-                        // 防止越界
-                        pose_idx = std::min(pose_idx, pose_table_.size() - 1);
-                        // pose
-                        const auto& pose = pose_table_[pose_idx];
+        // lidar点
+        p_lidar << pt.x, pt.y, pt.z;
+        // lidar -> imu
+        p_imu = q_li_ * p_lidar + t_li_;
+        // imu -> world
+        p_world = pose.R * p_imu + pose.t;
+        // world -> end frame
+        p_end = T_end_inv * p_world;
 
-                        // lidar点
-                        p_lidar << pt.x, pt.y, pt.z;
-                        // lidar -> imu
-                        p_imu = q_il_ * p_lidar + t_il_;
-                        // imu -> world
-                        p_world = pose.R * p_imu + pose.t;
-                        // world -> end frame
-                        p_end = T_end_inv * p_world;
-
-                        // 写入输出
-                        new_pt.x = static_cast<float>(p_end.x());
-                        new_pt.y = static_cast<float>(p_end.y());
-                        new_pt.z = static_cast<float>(p_end.z());
-                        new_pt.intensity = pt.intensity;
-                      }
-                    });
+        // 写入输出
+        new_pt.x = static_cast<float>(p_end.x());
+        new_pt.y = static_cast<float>(p_end.y());
+        new_pt.z = static_cast<float>(p_end.z());
+        new_pt.intensity = pt.intensity;
+      }
+    });
+  });
 
   output_cloud->width = output_cloud->size();
   output_cloud->height = 1;

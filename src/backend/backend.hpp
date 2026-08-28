@@ -88,6 +88,7 @@ class Backend {
 
   int max_keyframes_ = 5000;  ///< 最大关键帧数（位姿骨架 ~300B/帧，内存友好）
   int max_kf_clouds_ = 300;   ///< 最多保留点云的关键帧数（~64KB/帧）
+  int next_id_ = 0;           ///< 单调递增的关键帧 ID 计数器（淘汰后不复用，避免 PCD 文件名冲突）
 
   double last_keyframe_timestamp_ = -1.0;  ///< 上一个关键帧时间戳
 };

@@ -14,7 +14,7 @@ bool Backend::addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen
   // 第一帧
   if (keyframes_.empty()) {
     KeyFrame kf;
-    kf.id = 0;
+    kf.id = next_id_++;
     kf.timestamp = state.timestamp;
     kf.p = state.p;
     kf.q = state.q;
@@ -58,7 +58,7 @@ bool Backend::addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen
 
   // 创建新关键帧
   KeyFrame kf;
-  kf.id = static_cast<int>(keyframes_.size());
+  kf.id = next_id_++;
   kf.timestamp = state.timestamp;
   kf.p = state.p;
   kf.q = state.q;
@@ -107,9 +107,6 @@ bool Backend::addKeyFrame(const State& state, const CloudPtr& cloud, const Eigen
     while (static_cast<int>(keyframes_.size()) > max_keyframes_) {
       keyframes_.pop_front();
       removed++;
-    }
-    for (size_t i = 0; i < keyframes_.size(); ++i) {
-      keyframes_[i].id = static_cast<int>(i);
     }
     LOG(INFO) << "[KFMgr] 淘汰 " << removed << " 个最老KF, 剩余: " << keyframes_.size();
   }

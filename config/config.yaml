@@ -1,6 +1,6 @@
 bag_file: /home/yls/data/slam_tools/bag/chery/rosbag2_2025_06_20-18_50_48_qirui/
 
-save_map_path: /home/yls/data/slam_tools/map/map_0/test/
+save_map_path: /home/yls/data/slam_tools/map/lio_map/
 
 imu_topic: /ns4/livox/imu_192_168_1_2
 
@@ -13,10 +13,12 @@ map_topic: /map
 deskew_cloud_topic: /deskew_cloud
 
 # lidar -> imu
-t_imu_lidar: [ -0.011, -0.02329, 0.04412 ]
+t_lidar_imu: [ -0.011, -0.02329, 0.04412 ]
 
-r_imu_lidar: [ 1, 0, 0, 0, 1, 0, 0, 0, 1 ]
+r_lidar_imu: [ 1, 0, 0, 0, 1, 0, 0, 0, 1 ]
 
 g_norm: 9.80655
 
-is_use_imu: true
+is_use_ui: true
+
+num_threads: 0  #多线程核数: 0=不限制(全部核), >0=限制核数(实时定位预留CPU)

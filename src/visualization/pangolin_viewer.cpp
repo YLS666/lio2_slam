@@ -1,19 +1,19 @@
 #include "visualization/pangolin_viewer.hpp"
-
 #include <glog/logging.h>
 #include <pangolin/gl/gl.h>
 #include <pangolin/gl/opengl_render_state.h>
-
+#include <pcl/common/transforms.h>
 #include <chrono>
 #include <thread>
-
 #include "cloud_utils/point_type.hpp"
 #include "visualization/viewer_control.hpp"
 #include "visualization/viewer_gl_utils.hpp"
+#include "visualization/viewer_hud.hpp"
 #include "visualization/viewer_render.hpp"
 
 PangolinViewer::PangolinViewer() {
   current_cloud_.reset(new PointCloudType());
+  raw_current_cloud_.reset(new PointCloudType());
   local_map_.reset(new PointCloudType());
   global_map_.reset(new PointCloudType());
 
@@ -64,9 +64,10 @@ void PangolinViewer::stop() {
   LOG(INFO) << "PangolinViewer stopped";
 }
 
-void PangolinViewer::updateCurrentCloud(const CloudPtr& cloud) {
+void PangolinViewer::updateCurrentCloud(const CloudPtr& cloud, const Eigen::Matrix4f& T) {
   std::lock_guard<std::mutex> lock(data_mutex_);
-  *current_cloud_ = *cloud;
+  raw_current_cloud_ = cloud;  // shared_ptr 赋值, O(1)
+  current_T_ = T;
   current_cloud_dirty_ = true;
 }
 
@@ -76,13 +77,14 @@ void PangolinViewer::updateLocalMap(const CloudPtr& cloud) {
   local_map_dirty_ = true;
 }
 
-void PangolinViewer::appendGlobalMap(const CloudPtr& cloud) {
+void PangolinViewer::setLocalMapSource(std::function<CloudPtr()> getter) {
   std::lock_guard<std::mutex> lock(data_mutex_);
-  *global_map_ += *cloud;
-  CloudPtr temp(new PointCloudType());
-  temp = dsCloud(global_map_, 1.0f);
-  global_map_.swap(temp);
-  global_map_dirty_ = true;
+  local_map_getter_ = std::move(getter);
+}
+
+void PangolinViewer::appendGlobalMap(const CloudPtr& cloud, const Eigen::Matrix4f& T) {
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  pending_global_clouds_.emplace_back(cloud, T);  // 只存指针+位姿, 变换/累积/降采样在渲染线程做
 }
 
 void PangolinViewer::clearGlobalMap() {
@@ -112,7 +114,7 @@ void PangolinViewer::FollowRobot() {
   constexpr double follow_distance = 30.0;
   constexpr double camera_height_slam = 100.0;  // slam Z高度
 
-  // ========= SLAM世界坐标系 =========
+  // SLAM世界坐标系
   // 局部偏移：机器人本体坐标系，相机在机器人负前方（身后）
   Eigen::Vector3d local_offset(follow_distance, 0.0, 0.0);
 
@@ -162,7 +164,7 @@ void PangolinViewer::run() {
     const int view_w = static_cast<int>(kWindowWidth * 0.75f);  // 3D View 占窗口宽度的 75%
     const int view_h = kWindowHeight;
 
-    // ---------- 初始化 Pangolin ----------
+    // 初始化 Pangolin
     pangolin::CreateWindowAndBind("LIO2-SLAM Viewer", kWindowWidth, kWindowHeight);
 
     pangolin::CreatePanel("ui").SetBounds(0.7, 1.0, 0.75, 1.0);
@@ -183,7 +185,7 @@ void PangolinViewer::run() {
 
     default_view_ = camera_->GetModelViewMatrix();
 
-    // ---------- 初始化子模块 ----------
+    // 初始化子模块
     layout_.Init(*camera_);
     plot_.Init();
 
@@ -193,10 +195,10 @@ void PangolinViewer::run() {
     // 设置背景色
     glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
 
-    // ---------- 本地缓存（减少锁持有时间）----------
+    //  本地缓存（减少锁持有时间）
     viewer::ViewerCache cache;
 
-    // ---------- 主循环 ----------
+    // 主循环
     while (!should_exit_.load() && !pangolin::ShouldQuit()) {
       glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -213,29 +215,55 @@ void PangolinViewer::run() {
         trajectory_.clear();
       }
 
-      // ========== 获取数据（短期锁）==========
+      // 1. 重活(锁外): 全局地图累积
+      // global_map_ 此后只被渲染线程访问, 变换+累积+降采样都放这里
+      std::deque<std::pair<CloudPtr, Eigen::Matrix4f>> batch;
+      {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        batch.swap(pending_global_clouds_);
+      }
+      bool global_changed = false;
+      if (!batch.empty()) {
+        for (auto& [c, T] : batch) {
+          CloudPtr world(new PointCloudType());
+          pcl::transformPointCloud(*c, *world, T);
+          *global_map_ += *world;
+        }
+        CloudPtr temp = dsCloud(global_map_, 1.0f);
+        global_map_.swap(temp);
+        global_changed = true;
+      }
+
+      // 2. 重活(锁外): 局部地图刷新
+      // getCloud 内部锁 VoxelMap, 与主线程 addCloud 互斥
+      bool local_changed = false;
+      if (local_map_getter_ && (++local_map_refresh_counter_ % 10 == 0)) {
+        CloudPtr lm = local_map_getter_();
+        {
+          std::lock_guard<std::mutex> lock(data_mutex_);
+          local_map_.swap(lm);
+        }
+        local_changed = true;
+      }
+
+      // 3. 获取数据(短期锁, 只做轻量拷贝)
       {
         std::lock_guard<std::mutex> lock(data_mutex_);
 
         if (current_cloud_dirty_) {
-          *cache.current_cloud = *current_cloud_;
+          pcl::transformPointCloud(*raw_current_cloud_, *cache.current_cloud, current_T_);
           current_cloud_dirty_ = false;
         }
-
-        if (local_map_dirty_) {
+        if (local_changed) {
           *cache.local_map = *local_map_;
-          local_map_dirty_ = false;
         }
-
-        if (global_map_dirty_) {
+        if (global_changed) {
           *cache.global_map = *global_map_;
-          global_map_dirty_ = false;
         }
-
         cache.trajectory = trajectory_;
       }
 
-      // ========== 激活 3D View 并渲染 ==========
+      // 激活 3D View 并渲染
       layout_.Scene().Activate(*camera_);
 
       // 网格地面 (GL 坐标系，y=0 水平面，灰色)
@@ -245,7 +273,7 @@ void PangolinViewer::run() {
       constexpr float kGridSize = 20.0f;
       constexpr int kGridHalf = 20;
       for (int i = -kGridHalf; i <= kGridHalf; ++i) {
-        float coord = i * kGridSize;
+        float coord = static_cast<float>(i) * kGridSize;
         // 沿 X 方向的线（z 变化）
         glVertex3f(coord, 0.0f, -kGridHalf * kGridSize);
         glVertex3f(coord, 0.0f, kGridHalf * kGridSize);
