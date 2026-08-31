@@ -1,6 +1,5 @@
 #include "imu_processor.hpp"
 #include <glog/logging.h>
-#include <iostream>
 
 ImuProcessor::ImuProcessor(AllConfig& config) {
   g_norm_ = config.g_norm;  // 9.80665 m/s²

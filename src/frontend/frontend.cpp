@@ -7,7 +7,6 @@
 #include <fstream>
 #include <iomanip>
 #include "cloud_utils/point_type.hpp"
-#include "utils/parallel.hpp"
 
 Frontend::Frontend(AllConfig config)
     : is_use_viewer_(config.is_use_ui),
@@ -197,9 +196,7 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
 
   // 8. 可视化 (高频操作每帧执行, 低频操作隔帧执行以降低CPU)
   if (is_use_viewer_ && viewer_ && viewer_->isRunning()) {
-    M4f T = M4f::Identity();
-    T.block<3, 3>(0, 0) = state_.q.toRotationMatrix().cast<float>();
-    T.block<3, 1>(0, 3) = state_.p.cast<float>();
+    M4f T = se3ToMatrix4f(state_.q, state_.p);
 
     viewer_->updateCurrentCloud(cloud, T);  // O(1)
     viewer_->updatePose(state_.p, state_.q, state_.timestamp);
@@ -215,52 +212,7 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
 }
 
 CloudPtr Frontend::featureSample(const CloudPtr& cloud) const {
-  constexpr float VOXEL_SIZE = 0.3f;
-  const size_t N = cloud->size();
-  if (N == 0) {
-    return std::make_shared<PointCloudType>();
-  }
-
-  const float inv = 1.0f / VOXEL_SIZE;
-
-  // 1. 并行算每个点的体素 key, 打包成 64 位整数 (替代并发哈希表: 无锁无节点分配)
-  //    体素坐标范围 |v| < 2^20 (0.3m 体素下约 ±31 万米), 每维占 21 bit, 区间内无碰撞
-  std::vector<uint64_t> keys(N);
-  std::vector<uint32_t> idx(N);
-  tbb::task_arena arena(lio::effectiveThreads(num_threads_));
-  arena.execute([&] {
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, N, 4096), [&](const tbb::blocked_range<size_t>& range) {
-      for (size_t i = range.begin(); i != range.end(); ++i) {
-        const auto& pt = (*cloud)[i];
-        int64_t vx = static_cast<int64_t>(std::floor(pt.x * inv));
-        int64_t vy = static_cast<int64_t>(std::floor(pt.y * inv));
-        int64_t vz = static_cast<int64_t>(std::floor(pt.z * inv));
-        keys[i] = (static_cast<uint64_t>(vx & 0x1FFFFF) << 42) | (static_cast<uint64_t>(vy & 0x1FFFFF) << 21) |
-                  static_cast<uint64_t>(vz & 0x1FFFFF);
-        idx[i] = static_cast<uint32_t>(i);
-      }
-    });
-  });
-
-  // 2. 按 (key, 索引) 排序: 同 key 内索引升序, 复现原"保留首个点"语义
-  tbb::parallel_sort(idx.begin(), idx.end(), [&](uint32_t a, uint32_t b) {
-    if (keys[a] != keys[b]) {
-      return keys[a] < keys[b];
-    }
-    return a < b;
-  });
-
-  // 3. 顺序去重: 每个 key 保留最小索引点
-  CloudPtr out(new PointCloudType);
-  out->reserve(N);
-  uint64_t prev = std::numeric_limits<uint64_t>::max();
-  for (uint32_t i : idx) {
-    if (keys[i] != prev) {
-      out->push_back((*cloud)[i]);
-      prev = keys[i];
-    }
-  }
-  return out;
+  return voxelDownsample(cloud, 0.3f, VoxelReduce::FIRST, num_threads_);
 }
 
 void Frontend::saveMap(const std::string& save_dir) {
@@ -287,9 +239,7 @@ void Frontend::saveMap(const std::string& save_dir) {
           continue;
         }
 
-        M4f T = M4f::Identity();
-        T.block<3, 3>(0, 0) = kf.q.toRotationMatrix().cast<float>();
-        T.block<3, 1>(0, 3) = kf.p.cast<float>();
+        M4f T = se3ToMatrix4f(kf.q, kf.p);
 
         batch[i - base] = std::make_shared<PointCloudType>();
         pcl::transformPointCloud(*cloud, *batch[i - base], T);
@@ -342,9 +292,7 @@ void Frontend::mergeOptimizedKeyframesToMap() {
               << " eff=" << kf.ndt_effective;
 
     CloudPtr world_cloud(new PointCloudType());
-    M4f T = M4f::Identity();
-    T.block<3, 3>(0, 0) = kf.q.toRotationMatrix().cast<float>();
-    T.block<3, 1>(0, 3) = kf.p.cast<float>();
+    M4f T = se3ToMatrix4f(kf.q, kf.p);
     pcl::transformPointCloud(*kf.cloud, *world_cloud, T);
 
     CloudPtr new_cloud(new PointCloudType());

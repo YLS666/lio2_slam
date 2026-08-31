@@ -224,9 +224,7 @@ CloudPtr rebuildGlobalMap(const std::deque<KeyFrame>& keyframes, float voxel_siz
 
     CloudPtr world(new PointCloudType());
 
-    M4f T = M4f::Identity();
-    T.block<3, 3>(0, 0) = kf.q.toRotationMatrix().cast<float>();
-    T.block<3, 1>(0, 3) = kf.p.cast<float>();
+    M4f T = se3ToMatrix4f(kf.q, kf.p);
     pcl::transformPointCloud(*kf.cloud, *world, T);
 
     *all += *world;

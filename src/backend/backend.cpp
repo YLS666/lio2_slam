@@ -1,11 +1,6 @@
 #include "backend/backend.hpp"
 #include <glog/logging.h>
 #include <cmath>
-#include <iostream>
-#include "backend/keyframe.hpp"
-#include "cloud_utils/point_type.hpp"
-#include "frontend/state.hpp"
-#include "utils/eigen_types.hpp"
 
 Backend::Backend() {}
 

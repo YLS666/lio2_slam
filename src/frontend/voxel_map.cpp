@@ -1,5 +1,4 @@
 #include "frontend/voxel_map.hpp"
-#include <Eigen/Eigenvalues>
 #include "utils/parallel.hpp"
 
 // neighbor

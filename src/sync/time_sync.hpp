@@ -2,7 +2,7 @@
 
 #include "cloud_utils/point_type.hpp"
 #include "imu_utils/imu_processor.hpp"
-#include "measure/measure_group.hpp"
+#include "measure_group.hpp"
 
 class TimeSync {
  public:

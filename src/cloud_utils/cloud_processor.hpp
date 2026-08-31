@@ -4,7 +4,7 @@
 #include "cloud_utils/point_type.hpp"
 #include "config_def.hpp"
 #include "imu_utils/imu_processor.hpp"
-#include "measure/measure_group.hpp"
+#include "sync/measure_group.hpp"
 #include "utils/eigen_types.hpp"
 #include "utils/ros_types.hpp"
 

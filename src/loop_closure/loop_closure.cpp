@@ -36,9 +36,7 @@ void LoopClosure::run(const std::deque<KeyFrame>& keyframes, std::vector<LoopPai
     kfs.push_back(&kf);
     translations.push_back(kf.p);
 
-    M4f T = M4f::Identity();
-    T.block<3, 3>(0, 0) = kf.q.toRotationMatrix().cast<float>();
-    T.block<3, 1>(0, 3) = kf.p.cast<float>();
+    M4f T = se3ToMatrix4f(kf.q, kf.p);
     world_T.push_back(T);
 
     id_to_index[kf.id] = static_cast<int>(i);
