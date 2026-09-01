@@ -127,7 +127,7 @@ install (TARGETS run_optimizer RUNTIME DESTINATION lib/${PROJECT_NAME})
 # test_g2o
 add_executable (
   test_g2o
-  src/app/test_g2o.cpp)
+  src/test/test_g2o.cpp)
 
 target_link_libraries (
   test_g2o ${third_party_libs} ${Pangolin_LIBRARIES})

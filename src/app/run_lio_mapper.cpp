@@ -1,7 +1,6 @@
 #include <glog/logging.h>
 #include <pcl/io/pcd_io.h>
 #include <filesystem>
-#include <iostream>
 #include "cloud_utils/cloud_processor.hpp"
 #include "config_def.hpp"
 #include "frontend/frontend.hpp"

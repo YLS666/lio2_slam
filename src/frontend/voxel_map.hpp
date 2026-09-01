@@ -124,7 +124,9 @@ class FlatVoxelMap {
     }
     const size_t mask = keys_.size() - 1;
     size_t i = mix(key) & mask;
-    while (keys_[i] != kEmpty && keys_[i] != key) i = (i + 1) & mask;
+    while (keys_[i] != kEmpty && keys_[i] != key) {
+      i = (i + 1) & mask;
+    }
     if (keys_[i] == kEmpty) {
       keys_[i] = key;
       cells_[i] = NDTCell();
@@ -136,7 +138,9 @@ class FlatVoxelMap {
   template <typename F>
   void forEach(const F& f) const {
     for (size_t i = 0; i < keys_.size(); ++i) {
-      if (keys_[i] != kEmpty) f(keys_[i], cells_[i]);
+      if (keys_[i] != kEmpty) {
+        f(keys_[i], cells_[i]);
+      }
     }
   }
 

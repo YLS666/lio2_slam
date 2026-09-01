@@ -100,3 +100,11 @@ inline Eigen::Matrix3d vecToMat(std::vector<double>& mat_vec) {
   }
   return Eigen::Map<Eigen::Matrix<double, 3, 3, Eigen::RowMajor>>(mat_vec.data());
 }
+
+/** @brief SE3(四元数+平移) → Eigen::Matrix4f，供 pcl::transformPointCloud 使用 */
+inline M4f se3ToMatrix4f(const Qd& q, const V3d& p) {
+  M4f T = M4f::Identity();
+  T.block<3, 3>(0, 0) = q.toRotationMatrix().cast<float>();
+  T.block<3, 1>(0, 3) = p.cast<float>();
+  return T;
+}

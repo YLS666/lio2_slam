@@ -1,6 +1,5 @@
 #include "sync/time_sync.hpp"
 #include <glog/logging.h>
-#include "cloud_utils/point_type.hpp"
 
 TimeSync::TimeSync(ImuProcessor* imu_processor) : imu_processor_(imu_processor) {}
 
