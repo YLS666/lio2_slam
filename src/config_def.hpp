@@ -246,14 +246,14 @@ inline YAML::Node YamlConfig::get<YAML::Node>(const std::string &key, const YAML
   return node_[key];
 }
 
+const std::string LIO2_SLAM_DATA_PATH = std::string(std::getenv("HOME")) + "/data/lio2_slam";
+
 struct AllConfig {
-  std::string bag_file;
-  std::string save_map_path;
+  std::string bag_path;
+  int map_id;
   std::string imu_topic;
   std::string lidar_topic;
   std::string odom_topic;
-  std::string map_topic;
-  std::string deskew_cloud_topic;
   std::vector<double> t_lidar_imu;
   std::vector<double> r_lidar_imu;
   double g_norm;
@@ -267,14 +267,11 @@ struct AllConfig {
     }
 
     YamlConfig yaml_config(config_file_path);
-    bag_file = yaml_config.get("bag_file",
-                               std::string("/home/yls/data/slam_tools/bag/changfang/rosbag2_2026_05_07-16_30_57/"));
-    save_map_path = yaml_config.get("save_map_path", std::string("/home/yls/data/slam_tools/map/map_0/test/"));
-    imu_topic = yaml_config.get("imu_topic", std::string("/ns1/livox/imu_192_168_8_122"));
-    lidar_topic = yaml_config.get("lidar_topic", std::string("/ns1/livox/lidar_192_168_8_122"));
+    bag_path = LIO2_SLAM_DATA_PATH + yaml_config.get("bag_path", std::string("/bag/"));
+    map_id = yaml_config.get("map_id", 0);
+    imu_topic = yaml_config.get("imu_topic", std::string("/livox/imu"));
+    lidar_topic = yaml_config.get("lidar_topic", std::string("/livox/lidar"));
     odom_topic = yaml_config.get("odom_topic", std::string("/odom"));
-    map_topic = yaml_config.get("map_topic", std::string("/map"));
-    deskew_cloud_topic = yaml_config.get("deskew_cloud_topic", std::string("/deskew_cloud"));
     t_lidar_imu = yaml_config.get("t_lidar_imu", std::vector<double>{-0.011, -0.02329, 0.04412});
     r_lidar_imu = yaml_config.get("r_lidar_imu", std::vector<double>{1, 0, 0, 0, 1, 0, 0, 0, 1});
     g_norm = yaml_config.get("g_norm", 9.80655);

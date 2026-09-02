@@ -29,13 +29,16 @@ int main(int argc, char** argv) {
   FLAGS_rfc3339_format = false;   // 不使用RFC3339格式
   // FLAGS_logbuflevel = -1;       // 可选: 关闭缓存立即刷盘
 
-  std::string CONFIG_PATH = "./src/lio2_slam/config/config.yaml";
+  std::string config_path = LIO2_SLAM_DATA_PATH + "/config/config.yaml";
   AllConfig config;
-  if (!config.init(CONFIG_PATH)) {
-    LOG(ERROR) << "配置文件加载失败: " << CONFIG_PATH;
+  if (!config.init(config_path)) {
+    LOG(ERROR) << "配置文件加载失败: " << config_path;
     return -1;
   }
-  LOG(INFO) << "配置文件加载成功: " << CONFIG_PATH;
+  LOG(INFO) << "配置文件加载成功: " << config_path;
+
+  std::string map_path = LIO2_SLAM_DATA_PATH + "/map/map_" + std::to_string(config.map_id);
+  std::string keyframes_path = map_path + "/keyframes/";
 
   ImuProcessor imu_processor(config);
   CloudProcessor cloud_processor(config);
@@ -58,7 +61,7 @@ int main(int argc, char** argv) {
 
   BagIO bag(config);
 
-  LOG(INFO) << "开始处理 bag: " << config.bag_file;
+  LOG(INFO) << "开始处理 bag: " << config.bag_path;
 
   try {
     bag.run(
@@ -106,7 +109,7 @@ int main(int argc, char** argv) {
             frontend->propagateFromTrustedPose(measures.imu_datas, cloud_time, config.g_norm,
                                                imu_processor.getAccScale());
 
-            frontend->process(deskew_cloud, config.save_map_path);
+            frontend->process(deskew_cloud, keyframes_path);
 
             LOG(INFO) << "[TRAJ] " << std::fixed << std::setprecision(6) << measures.lidar_end_time << " "
                       << frontend->getState().p.transpose() << " " << frontend->getState().q.coeffs().transpose();
@@ -126,7 +129,7 @@ int main(int argc, char** argv) {
   }
 
   frontend->stopSaveWorker();  // 等关键帧全部落盘, 再重建地图
-  frontend->saveMap(config.save_map_path);
+  frontend->saveKeyframes(keyframes_path);
   LOG(INFO) << "关键帧数: " << frontend->getKeyframes().size();
   LOG(INFO) << "最终位姿: " << frontend->getState().p.transpose();
 

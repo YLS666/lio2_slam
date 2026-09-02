@@ -14,7 +14,7 @@
 using BlockSolver = g2o::BlockSolver<g2o::BlockSolverTraits<6, 3>>;
 using LinearSolver = g2o::LinearSolverEigen<BlockSolver::PoseMatrixType>;
 
-namespace postprocess {
+namespace g2o_optimizer {
 /**
  * 旋转在前的SO3+t类型pose，6自由度，存储时伪装为g2o::VertexSE3，供g2o_viewer查看
  */
@@ -71,4 +71,4 @@ class EdgeRelativeMotion : public g2o::BaseBinaryEdge<6, SE3, VertexPose, Vertex
   bool write(std::ostream& /*os*/) const override { return true; }
 };
 
-}  // namespace postprocess
+}  // namespace g2o_optimizer

@@ -1,16 +1,12 @@
-bag_file: /home/yls/data/slam_tools/bag/chery/rosbag2_2025_06_20-18_50_48_qirui/
+bag_path: /bag/chery/rosbag2_2025_06_20-18_50_48_qirui/
 
-save_map_path: /home/yls/data/slam_tools/map/lio_map/
+map_id: 0
 
 imu_topic: /ns4/livox/imu_192_168_1_2
 
 lidar_topic: /ns4/livox/lidar_192_168_1_2
 
 odom_topic: /odom
-
-map_topic: /map
-
-deskew_cloud_topic: /deskew_cloud
 
 # lidar -> imu
 t_lidar_imu: [ -0.011, -0.02329, 0.04412 ]

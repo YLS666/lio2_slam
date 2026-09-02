@@ -86,8 +86,8 @@ class Frontend {
   /** @brief 获取 18-DOF 全状态协方差 */
   Eigen::Matrix<double, 18, 18> getCovariance() const { return ieskf_->getCovariance(); }
 
-  /** @brief 保存地图 */
-  void saveMap(const std::string& save_dir);
+  /** @brief 保存关键帧和全局地图 */
+  void saveKeyframes(const std::string& save_dir);
 
   /** @brief 获取后端关键帧 */
   const std::deque<KeyFrame>& getKeyframes() const { return backend_->getKeyFrames(); }

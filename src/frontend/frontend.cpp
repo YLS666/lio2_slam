@@ -215,7 +215,7 @@ CloudPtr Frontend::featureSample(const CloudPtr& cloud) const {
   return voxelDownsample(cloud, 0.3f, VoxelReduce::FIRST, num_threads_);
 }
 
-void Frontend::saveMap(const std::string& save_dir) {
+void Frontend::saveKeyframes(const std::string& save_dir) {
   map_->clearAll();
   const auto& kfs = backend_->getKeyFrames();
   const size_t N = kfs.size();
@@ -255,7 +255,7 @@ void Frontend::saveMap(const std::string& save_dir) {
   }
 
   CloudPtr all = map_->getCloud();
-  std::string map_path = save_dir + "all_map_1.pcd";
+  std::string map_path = save_dir + "global_map.pcd";
   pcl::io::savePCDFileBinary(map_path, *all);
   LOG(INFO) << "地图保存完成: " << map_path << ", 点数: " << all->size();
 }

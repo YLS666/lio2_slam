@@ -9,7 +9,6 @@ class BagIO {
   explicit BagIO(AllConfig& config);
 
   void run(std::function<void(const Imu&)> imu_callback,
-
            std::function<void(const PointCloud2SharedPtr&)> cloud_callback);
 
  private:
