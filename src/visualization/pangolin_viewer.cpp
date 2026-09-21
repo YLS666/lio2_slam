@@ -28,8 +28,15 @@ void PangolinViewer::start() {
     return;
   }
 
+  // 处理上一次遗留的已结束的线程
+  if (thread_ && thread_->joinable()) {
+    thread_->join();
+  }
+  thread_.reset();
+
   should_exit_.store(false);
   initialized_.store(false);
+  thread_done_.store(false);
   running_.store(true);
 
   thread_ = std::make_unique<std::thread>(&PangolinViewer::run, this);
@@ -41,6 +48,10 @@ void PangolinViewer::start() {
 
   if (!initialized_.load()) {
     LOG(ERROR) << "PangolinViewer 初始化失败";
+    if (thread_ && thread_->joinable()) {
+      thread_->join();
+    }
+    thread_.reset();
     running_.store(false);
   } else {
     LOG(INFO) << "PangolinViewer started";
@@ -48,10 +59,6 @@ void PangolinViewer::start() {
 }
 
 void PangolinViewer::stop() {
-  if (!running_.load()) {
-    return;
-  }
-
   should_exit_.store(true);
 
   if (thread_ && thread_->joinable()) {
@@ -84,7 +91,10 @@ void PangolinViewer::setLocalMapSource(std::function<CloudPtr()> getter) {
 
 void PangolinViewer::appendGlobalMap(const CloudPtr& cloud, const Eigen::Matrix4f& T) {
   std::lock_guard<std::mutex> lock(data_mutex_);
-  pending_global_clouds_.emplace_back(cloud, T);  // 只存指针+位姿, 变换/累积/降采样在渲染线程做
+  if (pending_global_clouds_.size() >= kMaxPendingGlobalClouds) {
+    pending_global_clouds_.pop_front();  // 丢弃最旧未处理的显示更新
+  }
+  pending_global_clouds_.emplace_back(cloud, T);
 }
 
 void PangolinViewer::clearGlobalMap() {
@@ -165,7 +175,7 @@ void PangolinViewer::run() {
     const int view_h = kWindowHeight;
 
     // 初始化 Pangolin
-    pangolin::CreateWindowAndBind("LIO2-SLAM Viewer", kWindowWidth, kWindowHeight);
+    pangolin::CreateWindowAndBind(kWindowTitle, kWindowWidth, kWindowHeight);
 
     pangolin::CreatePanel("ui").SetBounds(0.7, 1.0, 0.75, 1.0);
 
@@ -212,6 +222,7 @@ void PangolinViewer::run() {
       }
 
       if (control_->ClearTrajectory()) {
+        std::lock_guard<std::mutex> lock(data_mutex_);
         trajectory_.clear();
       }
 
@@ -247,6 +258,7 @@ void PangolinViewer::run() {
       }
 
       // 3. 获取数据(短期锁, 只做轻量拷贝)
+      float vel = 0.0f, gyr = 0.0f, acc = 0.0f;
       {
         std::lock_guard<std::mutex> lock(data_mutex_);
 
@@ -261,6 +273,9 @@ void PangolinViewer::run() {
           *cache.global_map = *global_map_;
         }
         cache.trajectory = trajectory_;
+        vel = vel_magnitude_;
+        gyr = gyr_magnitude_;
+        acc = acc_magnitude_;
       }
 
       // 激活 3D View 并渲染
@@ -297,23 +312,23 @@ void PangolinViewer::run() {
       // 渲染轨迹
       viewer::DrawTrajectory(cache.trajectory);
 
-      // ========== HUD ==========
+      // HUD
       viewer::HudInfo hud;
-      hud.velocity = vel_magnitude_;
-      hud.gyroscope = gyr_magnitude_;
-      hud.acceleration = acc_magnitude_;
+      hud.velocity = vel;
+      hud.gyroscope = gyr;
+      hud.acceleration = acc;
       hud.trajectory_size = cache.trajectory.size();
       hud.global_map_size = cache.global_map->size();
 
       viewer::DrawHUD(hud);
 
-      // ========== Plot 渲染 ==========
-      plot_.Push(vel_magnitude_, gyr_magnitude_, acc_magnitude_);
+      // Plot 渲染
+      plot_.Push(vel, gyr, acc);
       plot_.RenderVel();
       plot_.RenderGyr();
       plot_.RenderAcc();
 
-      // ========== 交换缓冲 ==========
+      // 交换缓冲
       pangolin::FinishFrame();
 
       // 帧率控制 ~30 FPS（降低 CPU 占用）
@@ -327,6 +342,17 @@ void PangolinViewer::run() {
     initialized_.store(false);
   }
 
+  // 退出渲染循环后主动销毁窗口, 否则留下冻结且无法关闭的窗口
+  try {
+    pangolin::DestroyWindow(kWindowTitle);
+  } catch (...) {
+    // 销毁失败也不影响主线程继续运行
+  }
+
+  plot_.Shutdown();
+  layout_.Shutdown();
+  thread_done_.store(true);
+  running_.store(false);
   LOG(INFO) << "PangolinViewer main loop exited";
 }
 

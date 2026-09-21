@@ -38,24 +38,21 @@ class ViewerPlot {
    */
   void Push(float vel, float gyr, float acc);
 
+  /** @brief 在渲染线程内释放 Plotter (GL 上下文仍有效时调用) */
+  void Shutdown();
+
  private:
   static constexpr float kHistory = 60.0f;
-
   static constexpr float kVelMax = 5.0f;
-
   static constexpr float kGyrMax = 2.0f;
-
   static constexpr float kAccMax = 20.0f;
 
   float time_ = 0.0f;
 
   std::unique_ptr<pangolin::DataLog> log_;
-
-  pangolin::Plotter* vel_plot_ = nullptr;
-
-  pangolin::Plotter* gyr_plot_ = nullptr;
-
-  pangolin::Plotter* acc_plot_ = nullptr;
+  std::unique_ptr<pangolin::Plotter> vel_plot_;
+  std::unique_ptr<pangolin::Plotter> gyr_plot_;
+  std::unique_ptr<pangolin::Plotter> acc_plot_;
 };
 
 }  // namespace viewer

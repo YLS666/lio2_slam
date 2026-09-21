@@ -22,7 +22,7 @@ class pose_graph_opti {
  public:
   explicit pose_graph_opti(std::string map_path);
 
-  void run();
+  bool run();
 
   /**
    * @brief 从文本位姿文件加载关键帧（不含点云）

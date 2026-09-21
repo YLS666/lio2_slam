@@ -6,10 +6,12 @@ if (CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options (-Wall -Wextra -Wpedantic)
 endif ()
 
-set (
-  CMAKE_BUILD_TYPE
-  "Release"
-  CACHE STRING "Choose Release or Debug" FORCE)
+if (NOT CMAKE_BUILD_TYPE)
+  set (
+    CMAKE_BUILD_TYPE
+    "Release"
+    CACHE STRING "Choose Release or Debug" FORCE)
+endif ()
 
 set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,7 +21,7 @@ add_compile_options (-fdiagnostics-color=always)
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
   add_compile_options (-O0 -g)
 else ()
-  add_compile_options (-O3 -march=native -ffast-math -funroll-loops)
+  add_compile_options (-O3 -march=native -funroll-loops)
 endif ()
 
 find_package (ament_cmake REQUIRED)

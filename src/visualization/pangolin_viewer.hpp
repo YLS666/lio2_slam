@@ -54,6 +54,8 @@ class PangolinViewer {
   static Eigen::Vector3f heightToColor(float z, float z_min, float z_max);
 
  private:
+  static constexpr const char* kWindowTitle = "LIO2-SLAM Viewer";
+
   // Thread
   std::unique_ptr<std::thread> thread_;
 
@@ -62,6 +64,8 @@ class PangolinViewer {
   std::atomic<bool> should_exit_{false};
 
   std::atomic<bool> initialized_{false};
+
+  std::atomic<bool> thread_done_{false};
 
   // Data
   std::mutex data_mutex_;
@@ -79,6 +83,8 @@ class PangolinViewer {
   std::function<CloudPtr()> local_map_getter_;  // 由 Frontend 注入, 返回降采样后的局部地图
 
   std::deque<std::pair<CloudPtr, Eigen::Matrix4f>> pending_global_clouds_;  // 主线程投递的待处理全局点云
+
+  static constexpr size_t kMaxPendingGlobalClouds = 200;
 
   int local_map_refresh_counter_ = 0;
 

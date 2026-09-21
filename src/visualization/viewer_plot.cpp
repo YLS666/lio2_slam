@@ -13,17 +13,17 @@ void ViewerPlot::Init() {
   });
 
   // Velocity
-  vel_plot_ = new pangolin::Plotter(log_.get(), 0.0f, kHistory, 0.0f, kVelMax);
+  vel_plot_ = std::make_unique<pangolin::Plotter>(log_.get(), 0.0f, kHistory, 0.0f, kVelMax);
   vel_plot_->SetBackgroundColour(pangolin::Colour(0.08f, 0.08f, 0.10f));
   vel_plot_->AddSeries("$0", "$1", pangolin::DrawingModeLine, pangolin::Colour(1.0f, 0.55f, 0.0f), "Velocity");
 
   // Gyroscope
-  gyr_plot_ = new pangolin::Plotter(log_.get(), 0.0f, kHistory, 0.0f, kGyrMax);
+  gyr_plot_ = std::make_unique<pangolin::Plotter>(log_.get(), 0.0f, kHistory, 0.0f, kGyrMax);
   gyr_plot_->SetBackgroundColour(pangolin::Colour(0.08f, 0.08f, 0.10f));
   gyr_plot_->AddSeries("$0", "$2", pangolin::DrawingModeLine, pangolin::Colour(0.2f, 0.7f, 1.0f), "Gyroscope");
 
   // Acceleration
-  acc_plot_ = new pangolin::Plotter(log_.get(), 0.0f, kHistory, 0.0f, kAccMax);
+  acc_plot_ = std::make_unique<pangolin::Plotter>(log_.get(), 0.0f, kHistory, 0.0f, kAccMax);
   acc_plot_->SetBackgroundColour(pangolin::Colour(0.08f, 0.08f, 0.10f));
   acc_plot_->AddSeries("$0", "$3", pangolin::DrawingModeLine, pangolin::Colour(1.0f, 0.2f, 0.2f), "Acceleration");
 }
@@ -57,6 +57,13 @@ void ViewerPlot::Push(float vel, float gyr, float acc) {
   time_ += 0.1f;
 
   log_->Log(time_, vel, gyr, acc);
+}
+
+void ViewerPlot::Shutdown() {
+  vel_plot_.reset();
+  gyr_plot_.reset();
+  acc_plot_.reset();
+  log_.reset();
 }
 
 }  // namespace viewer

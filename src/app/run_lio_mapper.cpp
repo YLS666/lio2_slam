@@ -63,6 +63,7 @@ int main(int argc, char** argv) {
 
   LOG(INFO) << "开始处理 bag: " << config.bag_path;
 
+  int exit_code = 0;
   try {
     bag.run(
         [&](const Imu& imu_msg) {
@@ -126,15 +127,20 @@ int main(int argc, char** argv) {
         });
   } catch (const std::exception& e) {
     LOG(ERROR) << "程序异常终止: " << e.what();
+    exit_code = 1;
   }
 
   frontend->stopSaveWorker();  // 等关键帧全部落盘, 再重建地图
   frontend->saveKeyframes(keyframes_path);
+  if (frontend->saveError()) {
+    LOG(ERROR) << "关键帧保存线程出现错误,, 结果可能不完整";
+    exit_code = 1;
+  }
   LOG(INFO) << "关键帧数: " << frontend->getKeyframes().size();
   LOG(INFO) << "最终位姿: " << frontend->getState().p.transpose();
 
   frontend->stopViewer();
 
   google::ShutdownGoogleLogging();
-  return 0;
+  return exit_code;
 }

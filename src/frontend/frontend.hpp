@@ -16,6 +16,8 @@ class Frontend {
  public:
   explicit Frontend(AllConfig config);
 
+  ~Frontend();
+
   /** @brief 设置基础地图参数 */
   void setMapParams(float voxel_size, float block_size, int block_radius) {
     map_ = std::make_unique<VoxelMap>(voxel_size, block_size, block_radius);
@@ -109,6 +111,9 @@ class Frontend {
   /** @brief 停止异步保存线程 (会先写完队列里剩余任务) */
   void stopSaveWorker();
 
+  /** @brief 保存线程是否出现过失败 */
+  bool saveError() const { return save_error_.load(); }
+
  private:
   // 核心组件
   std::unique_ptr<VoxelMap> map_;
@@ -123,6 +128,7 @@ class Frontend {
   // 状态
   State state_;
   bool initialized_ = false;
+  bool kf_dir_cleared_ = false;  // 是否已清空关键帧保存目录
   int frame_count_ = 0;
 
   // 配准后的特征点云 (用于关键帧)
@@ -149,6 +155,9 @@ class Frontend {
   std::condition_variable save_cv_;
   std::deque<SaveTask> save_queue_;
   bool save_stop_ = false;
+  std::atomic<bool> save_error_{false};         // 异步保存线程是否出现过失败
+  static constexpr size_t kMaxSaveQueue = 512;  // 保存队列任务数上线
+  std::condition_variable save_cv_not_full_;    // 队列未满通知
 
   void saveWorkerLoop();
 };

@@ -32,7 +32,11 @@ int main(int argc, char** argv) {
   std::string map_path = LIO2_SLAM_DATA_PATH + "/map/map_" + std::to_string(config.map_id);
 
   pose_graph_opti pg_opti(map_path);
-  pg_opti.run();
+  if (!pg_opti.run()) {
+    LOG(ERROR) << "位姿图优化失败";
+    google::ShutdownGoogleLogging();
+    return 1;
+  }
 
   google::ShutdownGoogleLogging();
   return 0;

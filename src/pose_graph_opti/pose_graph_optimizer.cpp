@@ -23,39 +23,39 @@ pose_graph_opti::pose_graph_opti(std::string map_path) : map_path_(map_path) {
   global_map_.reset(new PointCloudType());
 }
 
-void pose_graph_opti::run() {
-  // 0. 清空split_map_path
+bool pose_graph_opti::run() {
+  // 1. 先验证输入是否可读
+  if (!loadKeyframePoses()) {
+    LOG(ERROR) << "加载位姿文件失败";
+    return false;
+  }
+  if (!loadKeyframeClouds()) {
+    LOG(ERROR) << "加载点云失败";
+    return false;
+  }
+
+  // 2. 输入有效, 再清理并创建输出目录
   if (std::filesystem::exists(split_map_path_)) {
     std::filesystem::remove_all(split_map_path_);
   }
   std::filesystem::create_directories(split_map_path_);
 
-  // 1. 加载关键帧位姿
-  if (!loadKeyframePoses()) {
-    LOG(ERROR) << "加载位姿文件失败";
-    return;
-  }
-
-  // 2. 加载关键帧点云 (回环 ICP + 重建地图需要)
-  if (!loadKeyframeClouds()) {
-    LOG(ERROR) << "加载点云失败";
-    return;
-  }
-
   // 3. 回环检测
   detectLoopClosures();
 
-  // 4. 全局位姿图优化 (g2o 内部迭代收敛, 即「再优化」)
+  // 4. 全局位姿图优化
   globalOptimize();
 
   // 5. 保存优化后的位姿
   saveKeyframePoses();
 
-  // 6. 用优化后的位姿重建最终地图
+  // 6. 重建最终地图
   rebuildGlobalMap();
 
-  // 7. 保存全局地图和分块地图和分块索引
+  // 7. 保存全局/分块地图
   saveGlobalAndSplitMap();
+
+  return true;
 }
 
 bool pose_graph_opti::loadKeyframePoses() {
@@ -105,9 +105,9 @@ bool pose_graph_opti::loadKeyframePoses() {
 }
 
 void pose_graph_opti::saveKeyframePoses() {
-  std::ofstream fout(pose_file_);
+  std::ofstream fout(out_pose_file_);
   if (!fout.is_open()) {
-    LOG(ERROR) << "无法写入位姿文件: " << pose_file_;
+    LOG(ERROR) << "无法写入位姿文件: " << out_pose_file_;
     return;
   }
 
@@ -288,14 +288,13 @@ void pose_graph_opti::rebuildGlobalMap() {
   }
 
   global_map_->reserve(10000000);
-  for (const auto& iter : map_data_) {
-    CloudPtr ds_cloud = dsCloud(iter.second, 0.1);
-    *global_map_ += *ds_cloud;
+  for (auto& iter : map_data_) {
+    iter.second = dsCloud(iter.second, 0.1);  // 降采样后写回, 保证分块图与全局图一致
+    iter.second->width = static_cast<uint32_t>(iter.second->points.size());
+    iter.second->height = 1;
+    iter.second->is_dense = false;
+    *global_map_ += *iter.second;
   }
-
-  global_map_->width = static_cast<uint32_t>(global_map_->size());
-  global_map_->height = 1;
-  global_map_->is_dense = false;
 
   LOG(INFO) << "final map:"
             << " input=" << all->size() << " output=" << global_map_->size();

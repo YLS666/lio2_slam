@@ -32,8 +32,13 @@ class ViewerLayout {
    */
   pangolin::View& Scene() { return *scene_; }
 
+  /** @brief 在渲染线程内释放 Handler3D */
+  void Shutdown();
+
  private:
   pangolin::View* scene_ = nullptr;
+
+  std::unique_ptr<pangolin::Handler3D> handler_;
 };
 
 }  // namespace viewer

@@ -46,6 +46,11 @@ Frontend::Frontend(AllConfig config)
   save_thread_ = std::thread(&Frontend::saveWorkerLoop, this);
 }
 
+Frontend::~Frontend() {
+  stopSaveWorker();
+  stopViewer();
+}
+
 void Frontend::init(const State& init_state) {
   state_ = init_state;
   // 设置 IESKF 全量状态 (含 bg, ba, g)
@@ -145,8 +150,7 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
 
   if (is_keyframe) {
     if (!kf_save_dir.empty()) {
-      static bool kf_dir_cleared = false;
-      if (!kf_dir_cleared) {
+      if (!kf_dir_cleared_) {
         if (std::filesystem::exists(kf_save_dir)) {
           std::filesystem::remove_all(kf_save_dir);
         }
@@ -158,7 +162,7 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
           fout << "# id timestamp px py pz qx qy qz qw i00 i01 ... i55\n";
         }
         fout.close();
-        kf_dir_cleared = true;
+        kf_dir_cleared_ = true;
       }
 
       const auto& kfs = backend_->getKeyFrames();
@@ -178,9 +182,12 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
       oss << "\n";
 
       {
-        std::lock_guard<std::mutex> lock(save_mtx_);
-        save_queue_.push_back({kf_save_dir + "kf_" + std::to_string(kf.id) + ".pcd", kf_save_dir + "keyframe_poses.txt",
-                               feature_cloud, oss.str()});
+        std::unique_lock<std::mutex> lock(save_mtx_);
+        save_cv_not_full_.wait(lock, [&] { return save_stop_ || save_queue_.size() < kMaxSaveQueue; });
+        if (!save_stop_) {
+          save_queue_.push_back({kf_save_dir + "kf_" + std::to_string(kf.id) + ".pcd",
+                                 kf_save_dir + "keyframe_poses.txt", feature_cloud, oss.str()});
+        }
       }
       save_cv_.notify_one();
     }
@@ -387,7 +394,6 @@ void Frontend::initViewer() {
     viewer_->start();
   }
 }
-
 void Frontend::saveWorkerLoop() {
   while (true) {
     SaveTask task;
@@ -399,14 +405,29 @@ void Frontend::saveWorkerLoop() {
       }
       task = std::move(save_queue_.front());
       save_queue_.pop_front();
+      save_cv_not_full_.notify_one();  // 释放一个队列槽位
     }
 
-    pcl::io::savePCDFileBinary(task.pcd_path, *task.cloud);
-    std::ofstream fout(task.pose_path, std::ios::app);
-    if (fout.is_open()) {
+    try {
+      if (pcl::io::savePCDFileBinary(task.pcd_path, *task.cloud) != 0) {
+        throw std::runtime_error("savePCDFileBinary 失败: " + task.pcd_path);
+      }
+      std::ofstream fout(task.pose_path, std::ios::app);
+      if (!fout.is_open()) {
+        throw std::runtime_error("无法打开位姿文件: " + task.pose_path);
+      }
       fout << task.pose_line;
+      if (!fout.good()) {
+        throw std::runtime_error("写入位姿失败: " + task.pose_path);
+      }
+      fout.close();
+    } catch (const std::exception& e) {
+      LOG(ERROR) << "SaveWorker : " << e.what();
+      save_error_.store(true);
+    } catch (...) {
+      LOG(ERROR) << "SaveWorker : 未知异常";
+      save_error_.store(true);
     }
-    fout.close();
   }
 }
 
