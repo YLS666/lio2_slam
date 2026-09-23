@@ -94,7 +94,15 @@ int main(int argc, char** argv) {
           time_sync.pushCloud(out_cloud);
 
           MeasureGroup measures;
-          while (time_sync.syncMeasure(measures)) {
+          while (true) {
+            auto result = time_sync.syncMeasure(measures);
+            if (result == TimeSync::SyncResult::kDropped) {
+              continue;  // 丢弃后继续检查下一帧
+            }
+            if (result != TimeSync::SyncResult::kReady) {
+              break;  // kWait: 等待更多数据
+            }
+
             if (measures.imu_datas.size() < 2) {
               LOG(WARNING) << "IMU数据不足,跳过当前scan";
               continue;

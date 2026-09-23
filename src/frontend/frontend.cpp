@@ -67,7 +67,11 @@ State Frontend::process(const CloudPtr& cloud, const std::string& kf_save_dir) {
   // 初始化
   if (!initialized_) {
     CloudPtr init_cloud = dsCloud(cloud, 0.2f);
-    map_->addCloud(init_cloud);
+    // 首帧点云在 scan_end 的 body 系, 必须用当前状态变换到世界系再建图
+    CloudPtr world_cloud(new PointCloudType());
+    M4f T = se3ToMatrix4f(state_.q, state_.p);
+    pcl::transformPointCloud(*init_cloud, *world_cloud, T);
+    map_->addCloud(world_cloud);
     map_->setLocalCenter(state_.p);
     initialized_ = true;
     LOG(INFO) << "初始化完成，地图点数: " << map_->size();
@@ -326,8 +330,6 @@ void Frontend::propagateFromTrustedPose(const std::deque<Imu>& imu_datas, double
     return;
   }
 
-  // 起点: 上一帧的可靠状态 (含在线估计的 bg, ba, g)
-  // bg 以 ImuProcessor 标定值为初值，IESKF 在线微调，跨帧保持
   ieskf_->setState(state_.q, state_.p, state_.v, state_.bg, state_.ba, state_.g, state_.timestamp);
 
   double start_time = state_.timestamp;
@@ -344,40 +346,49 @@ void Frontend::propagateFromTrustedPose(const std::deque<Imu>& imu_datas, double
     double t0 = imu0.header.stamp.sec + imu0.header.stamp.nanosec * 1e-9;
     double t1 = imu1.header.stamp.sec + imu1.header.stamp.nanosec * 1e-9;
 
-    // 跳过 start_time 之前的 IMU，超过 cloud_time 停止
-    if (t1 < start_time) {
-      continue;
+    if (t1 <= start_time) {
+      continue;  // 区间完全在起点之前
     }
-    if (t0 > cloud_time) {
-      break;
+    if (t0 >= cloud_time) {
+      break;  // 区间完全在终点之后
     }
 
-    double dt = t1 - t0;
+    // 裁剪到 [start_time, cloud_time], 只积分有效段
+    double a = std::max(t0, start_time);
+    double b = std::min(t1, cloud_time);
+    double dt = b - a;
     if (dt <= 0.0 || dt > 0.1) {
       continue;
     }
 
-    // 直接使用原始 IMU 陀螺仪和加速度计测量值
+    // 在裁剪后的端点 a、b 处插值 IMU 测量
+    double span = t1 - t0;
+    double ratio_a = (a - t0) / span;
+    double ratio_b = (b - t0) / span;
+
     V3d gyr0(imu0.angular_velocity.x, imu0.angular_velocity.y, imu0.angular_velocity.z);
     V3d gyr1(imu1.angular_velocity.x, imu1.angular_velocity.y, imu1.angular_velocity.z);
     V3d acc0(imu0.linear_acceleration.x, imu0.linear_acceleration.y, imu0.linear_acceleration.z);
     V3d acc1(imu1.linear_acceleration.x, imu1.linear_acceleration.y, imu1.linear_acceleration.z);
 
+    V3d gyr_a = gyr0 + ratio_a * (gyr1 - gyr0);
+    V3d gyr_b = gyr0 + ratio_b * (gyr1 - gyr0);
+    V3d acc_a = acc0 + ratio_a * (acc1 - acc0);
+    V3d acc_b = acc0 + ratio_b * (acc1 - acc0);
+
     // g → m/s²
-    acc0 *= g_norm * acc_scale;
-    acc1 *= g_norm * acc_scale;
+    acc_a *= g_norm * acc_scale;
+    acc_b *= g_norm * acc_scale;
 
-    // 中值积分
-    V3d gyr_mid = 0.5 * (gyr0 + gyr1);
-    V3d acc_mid = 0.5 * (acc0 + acc1);
+    V3d gyr_mid = 0.5 * (gyr_a + gyr_b);
+    V3d acc_mid = 0.5 * (acc_a + acc_b);
 
-    // IESKF::predict() 内部减去在线估计的 bg_/ba_
     ieskf_->predict(gyr_mid, acc_mid, dt);
     predict_count++;
   }
 
-  // 更新当前 state_ 为递推结果
   state_ = ieskf_->getNominalState();
+  // 裁剪后 current_time_ 应已等于 cloud_time; 这里保留覆盖仅为防御(IMU 有间隙时仍会偏小)
   state_.timestamp = cloud_time;
 
   VLOG(1) << "[IMU Propagate] predict_count=" << predict_count << " pred_p=" << state_.p.transpose()

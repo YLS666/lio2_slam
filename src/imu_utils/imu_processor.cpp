@@ -54,13 +54,23 @@ void ImuProcessor::initializeImu(double t, const V3d& gyr, const V3d& acc) {
   LOG(INFO) << "cov_acc = " << cov_acc.transpose() << " (norm=" << cov_acc.norm() << ")";
 
   // 3. 检查是否满足静止条件（噪声足够小）+ 重试机制
-  if (cov_gyr.norm() > kMaxStaticGyrVar || cov_acc.norm() > kMaxStaticAccVar) {
+  bool acc_valid = mean_acc.allFinite() && std::abs(mean_acc.norm() - g_norm_) < kMaxAccNormDeviation;
+  bool gyr_valid = mean_gyr.allFinite() && mean_gyr.norm() < kMaxStaticGyrMean;
+  if (cov_gyr.norm() > kMaxStaticGyrVar || cov_acc.norm() > kMaxStaticAccVar || !acc_valid || !gyr_valid) {
     init_attempt_++;
     LOG(WARNING) << "IMU 噪声过大（可能是运动中）,正在重试... "
                  << "尝试次数 " << init_attempt_ << " / " << kMaxInitAttempts;
 
     if (init_attempt_ >= kMaxInitAttempts) {
-      // 达到最大重试次数：使用降级策略,用默认值初始化
+      // 达到最大重试次数：均值合法才降级, 否则保持失败状态等待后续数据
+      if (!mean_acc.allFinite() || mean_acc.norm() <= 1e-3 || !mean_gyr.allFinite()) {
+        LOG(ERROR) << "IMU 初始化失败: 均值非法, 保持未初始化状态";
+        init_gyrs_.clear();
+        init_accs_.clear();
+        init_count_ = 0;
+        init_attempt_ = 0;
+        return;
+      }
       LOG(WARNING) << "IMU 初始化达到最大尝试次数,使用降级默认值";
 
       // 零偏使用当前均值（虽然可能有误差,但比0好）
@@ -118,9 +128,7 @@ void ImuProcessor::initializeImu(double t, const V3d& gyr, const V3d& acc) {
 
   states_.push_back(init_state);
   initialized_ = true;
-  last_gyr_ = mean_gyr;
-  last_acc_ = mean_acc;
-  has_last_imu_ = true;
+  has_last_imu_ = false;
 
   LOG(INFO);
   LOG(INFO) << "========== IMU INIT ==========";

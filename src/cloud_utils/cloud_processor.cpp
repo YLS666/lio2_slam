@@ -6,12 +6,31 @@
 #include "utils/parallel.hpp"
 
 CloudProcessor::CloudProcessor(AllConfig& config) {
-  q_li_ = vecToMat(config.r_lidar_imu).normalized();
-  t_li_ = V3d(config.t_lidar_imu.data());
+  M3d R_li = vecToMat(config.r_lidar_imu);  // vecToMat 内部已校验必须是 9 个元素
+  if (!R_li.allFinite()) {
+    LOG(ERROR) << "外参旋转矩阵含非有限值, 回退为单位阵";
+    q_li_ = Qd::Identity();
+  } else {
+    // 构造四元数后再归一化
+    q_li_ = Qd(R_li).normalized();
+  }
+
+  if (config.t_lidar_imu.size() != 3) {
+    LOG(ERROR) << "外参平移 t_lidar_imu 长度应为 3, 实际 " << config.t_lidar_imu.size() << ", 回退为 0";
+    t_li_ = V3d::Zero();
+  } else {
+    t_li_ = V3d(config.t_lidar_imu.data());
+  }
 }
 
 void CloudProcessor::pre_process(const PointCloud2SharedPtr& cloud, FullCloudPtr& out_cloud) {
   try {
+    if (!cloud || cloud->width == 0) {
+      LOG(ERROR) << "空点云或 width=0, 无法解析";
+      out_cloud->clear();
+      return;
+    }
+
     PointCloud2ConstIterator<float> iter_x(*cloud, "x");
     PointCloud2ConstIterator<float> iter_y(*cloud, "y");
     PointCloud2ConstIterator<float> iter_z(*cloud, "z");
@@ -37,7 +56,7 @@ void CloudProcessor::pre_process(const PointCloud2SharedPtr& cloud, FullCloudPtr
       new_pt.x = *iter_x;
       new_pt.y = *iter_y;
       new_pt.z = *iter_z;
-      new_pt.intensity = static_cast<uint8_t>(std::clamp(std::round(*iter_i), 0.0f, 65535.0f));
+      new_pt.intensity = static_cast<uint16_t>(std::clamp(std::round(*iter_i), 0.0f, 65535.0f));
       new_pt.timestamp = (*iter_t - static_cast<double>(start)) * 1e-9;
       new_pt.ring = 0;
 
@@ -111,10 +130,20 @@ CloudPtr CloudProcessor::process(const MeasureGroup& measures, ImuProcessor* imu
   double scan_begin = measures.lidar_begin_time;
   double scan_end = measures.lidar_end_time;
   double scan_duration = scan_end - scan_begin;
+  if (!(scan_duration > 0.0) || scan_duration > 10.0) {
+    LOG(ERROR) << "scan 时间区间非法: begin=" << scan_begin << " end=" << scan_end;
+    return output_cloud;
+  }
+
   // pose数量
   size_t pose_num = static_cast<size_t>(scan_duration / POSE_DT) + 2;
-  // resize
+  // resize 并预填充为末尾状态, 避免循环中途 break 后读到未初始化/上一帧遗留数据
   pose_table_.resize(pose_num);
+  for (auto& pose : pose_table_) {
+    pose.R = end_state.T.rotationMatrix();
+    pose.t = end_state.T.translation();
+  }
+
   // imu索引
   size_t imu_idx = 0;
 
@@ -164,7 +193,10 @@ CloudPtr CloudProcessor::process(const MeasureGroup& measures, ImuProcessor* imu
         auto& new_pt = output_cloud->points[i];
 
         // 点时间
-        double pt_offset = pt.timestamp;  // 秒级偏移，无需再乘 1e-9
+        double pt_offset = pt.timestamp - cloud->points.front().timestamp;  // 秒级偏移，无需再乘 1e-9
+        if (pt_offset < 0.0) {
+          pt_offset = 0.0;
+        }
         size_t pose_idx = static_cast<size_t>(pt_offset / POSE_DT);
         // 防止越界
         pose_idx = std::min(pose_idx, pose_table_.size() - 1);

@@ -52,8 +52,10 @@ class ImuProcessor {
   int init_attempt_ = 0;                      // 当前初始化尝试次数
   static constexpr int kMaxInitAttempts = 5;  // 最大尝试次数（约 5*200 = 1000 帧）
 
-  static constexpr double kMaxStaticGyrVar = 0.5;   // 陀螺仪静态噪声最大方差
-  static constexpr double kMaxStaticAccVar = 0.05;  // 加速度计静态噪声最大方差
+  static constexpr double kMaxStaticGyrVar = 0.5;      // 陀螺仪静态噪声最大方差
+  static constexpr double kMaxStaticAccVar = 0.05;     // 加速度计静态噪声最大方差
+  static constexpr double kMaxStaticGyrMean = 0.1;     // 静止时，平均角速度上限（rad/s）
+  static constexpr double kMaxAccNormDeviation = 1.0;  // |mean_acc| 与 g_norm 允许的最大偏差 (m/s²)
 
   double acc_scale_ = 1.0;  // 加速度计放缩系数
   V3d gravity_dir_;         // 归一化重力方向

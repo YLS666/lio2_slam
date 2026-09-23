@@ -19,23 +19,23 @@ void TimeSync::pushCloud(FullCloudPtr cloud) {
   }
 }
 
-bool TimeSync::syncMeasure(MeasureGroup& measures) {
+TimeSync::SyncResult TimeSync::syncMeasure(MeasureGroup& measures) {
   if (cloud_buffer_.empty()) {
-    return false;
+    return SyncResult::kWait;
   }
 
   auto cloud = cloud_buffer_.front();
 
   if (cloud->empty()) {
     cloud_buffer_.pop_front();
-    return false;
+    return SyncResult::kDropped;
   }
 
   double lidar_begin_time = static_cast<double>(cloud->header.stamp) * 1e-9 + cloud->points.front().timestamp;  // s
   double lidar_end_time = static_cast<double>(cloud->header.stamp) * 1e-9 + cloud->points.back().timestamp;
 
   if (imu_buffer_.empty()) {
-    return false;
+    return SyncResult::kWait;
   }
 
   double imu_begin_time = imu_buffer_.front().header.stamp.sec + imu_buffer_.front().header.stamp.nanosec * 1e-9;  // s
@@ -45,12 +45,12 @@ bool TimeSync::syncMeasure(MeasureGroup& measures) {
   if (lidar_end_time < imu_begin_time) {
     LOG(WARNING) << "lidar too old, drop this scan";
     cloud_buffer_.pop_front();
-    return false;
+    return SyncResult::kDropped;
   }
 
   // 情况2：imu还没覆盖scan
   if (imu_last_time < lidar_end_time) {
-    return false;
+    return SyncResult::kWait;
   }
 
   measures.lidar = cloud;
@@ -90,7 +90,7 @@ bool TimeSync::syncMeasure(MeasureGroup& measures) {
 
   if (measures.imu_datas.size() < 2) {
     LOG(WARNING) << "Not enough imu data.";
-    return false;
+    return SyncResult::kDropped;
   }
 
   double measure_imu_start_time =
@@ -127,5 +127,5 @@ bool TimeSync::syncMeasure(MeasureGroup& measures) {
     }
   }
 
-  return true;
+  return SyncResult::kReady;
 }

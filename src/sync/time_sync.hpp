@@ -12,7 +12,9 @@ class TimeSync {
 
   void pushCloud(FullCloudPtr cloud);
 
-  bool syncMeasure(MeasureGroup& measures);
+  enum class SyncResult { kReady, kWait, kDropped };
+
+  SyncResult syncMeasure(MeasureGroup& measures);
 
  private:
   std::deque<Imu> imu_buffer_;
